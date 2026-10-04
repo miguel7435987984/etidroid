@@ -13,6 +13,9 @@ case "$TARGET" in
     BASE_ISO_URL="https://downloads.sourceforge.net/project/android-x86/Release%204.4/android-x86-4.4-r5.iso"
     OUTPUT_ISO="${SCRIPT_DIR}/etidroid-4.4-r5.iso"
     IS_EFI_DUAL=true
+    EFI_LOAD_SIZE=6144
+    EXPAND_SIZE="1250M"
+    VOL_ID="Etidroid LiveCD"
     ;;
   5.1|5.1-rc1)
     VERSION_TAG="5.1-rc1"
@@ -20,9 +23,22 @@ case "$TARGET" in
     BASE_ISO_URL="https://downloads.sourceforge.net/project/android-x86/Release%205.1/android-x86-5.1-rc1.iso"
     OUTPUT_ISO="${SCRIPT_DIR}/etidroid-5.1-rc1.iso"
     IS_EFI_DUAL=false
+    EFI_LOAD_SIZE=0
+    EXPAND_SIZE="1250M"
+    VOL_ID="Etidroid LiveCD"
+    ;;
+  7.1|7.1-r5)
+    VERSION_TAG="7.1-r5"
+    BASE_ISO_NAME="android-x86_64-7.1-r5.iso"
+    BASE_ISO_URL="https://downloads.sourceforge.net/project/android-x86/Release%207.1/android-x86_64-7.1-r5.iso"
+    OUTPUT_ISO="${SCRIPT_DIR}/etidroid-7.1-r5.iso"
+    IS_EFI_DUAL=true
+    EFI_LOAD_SIZE=8192
+    EXPAND_SIZE="2600M"
+    VOL_ID="Etidroid 7.1-r5 (x86_64)"
     ;;
   *)
-    echo "Uso: $0 [4.4|5.1]"
+    echo "Uso: $0 [4.4|5.1|7.1]"
     exit 1
     ;;
 esac
@@ -66,13 +82,14 @@ mkdir -p "$WORK_DIR/sfs-root"
 unsquashfs -no-xattrs -d "$WORK_DIR/sfs-root" "$WORK_DIR/iso-root/system.sfs"
 
 IMG="$WORK_DIR/sfs-root/system.img"
-echo "[+] Redimensionando system.img..."
-truncate -s 1250M "$IMG"
+echo "[+] Redimensionando system.img para $EXPAND_SIZE..."
+truncate -s "$EXPAND_SIZE" "$IMG"
 e2fsck -f -y "$IMG" || true
 resize2fs "$IMG"
 
 echo "[+] Extraindo e ajustando build.prop..."
 debugfs -R "dump build.prop \"$WORK_DIR/build.prop\"" "$IMG"
+sed -i 's/ro.product.model=Generic Android-x86_64/ro.product.model=Etidroid/g' "$WORK_DIR/build.prop"
 sed -i 's/ro.product.model=Generic Android-x86/ro.product.model=Etidroid/g' "$WORK_DIR/build.prop"
 sed -i 's/ro.product.brand=Android-x86/ro.product.brand=Etidroid/g' "$WORK_DIR/build.prop"
 sed -i "s/ro.build.display.id=.*/ro.build.display.id=Etidroid $VERSION_TAG/g" "$WORK_DIR/build.prop"
@@ -103,7 +120,9 @@ mksquashfs "$WORK_DIR/sfs-root" "$WORK_DIR/iso-root/system.sfs" -comp gzip -b 12
 
 # 6. Atualizar menus de boot
 echo "[+] Atualizando menus de boot..."
-sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/isolinux/isolinux.cfg"
+if [ -f "$WORK_DIR/iso-root/isolinux/isolinux.cfg" ]; then
+    sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/isolinux/isolinux.cfg"
+fi
 if [ -f "$WORK_DIR/iso-root/boot/grub/grub.cfg" ]; then
     sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/boot/grub/grub.cfg"
 fi
@@ -112,12 +131,15 @@ if [ -f "$WORK_DIR/iso-root/efi/boot/grub.cfg" ]; then
     sed -i "s/Etidroid VER/Etidroid $VERSION_TAG/g" "$WORK_DIR/iso-root/efi/boot/grub.cfg"
     sed -i 's/CMDLINE/androidboot.hardware=android_x86/g' "$WORK_DIR/iso-root/efi/boot/grub.cfg"
 fi
+if [ -f "$WORK_DIR/iso-root/efi/boot/android.cfg" ]; then
+    sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
+fi
 
 # 7. Gerar ISO bootavel hibrida com xorriso
 echo "[+] Gerando ISO final $OUTPUT_ISO com xorriso..."
 if [ "$IS_EFI_DUAL" = true ]; then
   xorriso -as mkisofs \
-    -V 'Etidroid LiveCD' \
+    -V "$VOL_ID" \
     -r -J -l \
     -isohybrid-mbr --interval:local_fs:0s-15s:zero_mbrpt,zero_gpt:"$BASE_ISO" \
     -partition_cyl_align on \
@@ -135,13 +157,13 @@ if [ "$IS_EFI_DUAL" = true ]; then
     -eltorito-alt-boot \
     -e '/boot/grub/efi.img' \
     -no-emul-boot \
-    -boot-load-size 6144 \
+    -boot-load-size "$EFI_LOAD_SIZE" \
     -isohybrid-gpt-basdat \
     -o "$OUTPUT_ISO" \
     "$WORK_DIR/iso-root"
 else
   xorriso -as mkisofs \
-    -V 'Etidroid LiveCD' \
+    -V "$VOL_ID" \
     -r -J -l \
     -isohybrid-mbr --interval:local_fs:0s-15s:zero_mbrpt:"$BASE_ISO" \
     -partition_cyl_align on \
