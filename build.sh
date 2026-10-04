@@ -43,7 +43,7 @@ find "$WORK_DIR/iso-root" -name "TRANS.TBL" -delete
 # 4. Extrair e modificar system.img
 echo "[+] Descompactando system.sfs..."
 mkdir -p "$WORK_DIR/sfs-root"
-unsquashfs -d "$WORK_DIR/sfs-root" "$WORK_DIR/iso-root/system.sfs"
+unsquashfs -no-xattrs -d "$WORK_DIR/sfs-root" "$WORK_DIR/iso-root/system.sfs"
 
 IMG="$WORK_DIR/sfs-root/system.img"
 echo "[+] Redimensionando system.img..."
