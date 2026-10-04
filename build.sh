@@ -3,17 +3,37 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK_DIR="${SCRIPT_DIR}/build_tmp"
-OUTPUT_ISO="${SCRIPT_DIR}/etidroid-4.4-r5.iso"
-BASE_ISO="${SCRIPT_DIR}/android-x86-4.4-r5.iso"
+TARGET="${1:-4.4}"
 VIDEO_INPUT="${SCRIPT_DIR}/assets/bootanimation.mp4"
 
-BASE_ISO_URL="https://downloads.sourceforge.net/project/android-x86/Release%204.4/android-x86-4.4-r5.iso"
+case "$TARGET" in
+  4.4|4.4-r5)
+    VERSION_TAG="4.4-r5"
+    BASE_ISO_NAME="android-x86-4.4-r5.iso"
+    BASE_ISO_URL="https://downloads.sourceforge.net/project/android-x86/Release%204.4/android-x86-4.4-r5.iso"
+    OUTPUT_ISO="${SCRIPT_DIR}/etidroid-4.4-r5.iso"
+    IS_EFI_DUAL=true
+    ;;
+  5.1|5.1-rc1)
+    VERSION_TAG="5.1-rc1"
+    BASE_ISO_NAME="android-x86-5.1-rc1.iso"
+    BASE_ISO_URL="https://downloads.sourceforge.net/project/android-x86/Release%205.1/android-x86-5.1-rc1.iso"
+    OUTPUT_ISO="${SCRIPT_DIR}/etidroid-5.1-rc1.iso"
+    IS_EFI_DUAL=false
+    ;;
+  *)
+    echo "Uso: $0 [4.4|5.1]"
+    exit 1
+    ;;
+esac
 
-echo "=== Etidroid ISO Build Script ==="
+BASE_ISO="${SCRIPT_DIR}/${BASE_ISO_NAME}"
+
+echo "=== Etidroid ISO Build Script (Alvo: $VERSION_TAG) ==="
 
 # 1. Download base ISO if not present
 if [ ! -f "$BASE_ISO" ]; then
-    echo "[+] Baixando Android-x86 4.4-r5 base ISO..."
+    echo "[+] Baixando $BASE_ISO_NAME..."
     curl -L -o "$BASE_ISO" "$BASE_ISO_URL"
 fi
 
@@ -52,21 +72,21 @@ e2fsck -f -y "$IMG" || true
 resize2fs "$IMG"
 
 echo "[+] Extraindo e ajustando build.prop..."
-debugfs -R "dump build.prop $WORK_DIR/build.prop" "$IMG"
+debugfs -R "dump build.prop \"$WORK_DIR/build.prop\"" "$IMG"
 sed -i 's/ro.product.model=Generic Android-x86/ro.product.model=Etidroid/g' "$WORK_DIR/build.prop"
 sed -i 's/ro.product.brand=Android-x86/ro.product.brand=Etidroid/g' "$WORK_DIR/build.prop"
-sed -i 's/ro.build.display.id=.*/ro.build.display.id=Etidroid 4.4-r5/g' "$WORK_DIR/build.prop"
+sed -i "s/ro.build.display.id=.*/ro.build.display.id=Etidroid $VERSION_TAG/g" "$WORK_DIR/build.prop"
 
 echo "[+] Injetando arquivos no system.img via debugfs..."
 debugfs -w -R "rm media/bootanimation.zip" "$IMG" 2>/dev/null || true
-debugfs -w -R "write $WORK_DIR/bootanimation.zip media/bootanimation.zip" "$IMG"
+debugfs -w -R "write \"$WORK_DIR/bootanimation.zip\" media/bootanimation.zip" "$IMG"
 debugfs -w -R "sif media/bootanimation.zip mode 0100644" "$IMG"
 debugfs -w -R "sif media/bootanimation.zip uid 0" "$IMG"
 debugfs -w -R "sif media/bootanimation.zip gid 0" "$IMG"
 debugfs -w -R "ea_set media/bootanimation.zip security.selinux u:object_r:system_file:s0\000" "$IMG"
 
 debugfs -w -R "rm build.prop" "$IMG"
-debugfs -w -R "write $WORK_DIR/build.prop build.prop" "$IMG"
+debugfs -w -R "write \"$WORK_DIR/build.prop\" build.prop" "$IMG"
 debugfs -w -R "sif build.prop mode 0100644" "$IMG"
 debugfs -w -R "sif build.prop uid 0" "$IMG"
 debugfs -w -R "sif build.prop gid 0" "$IMG"
@@ -82,35 +102,62 @@ echo "[+] Reempacotando system.sfs..."
 mksquashfs "$WORK_DIR/sfs-root" "$WORK_DIR/iso-root/system.sfs" -comp gzip -b 128k -noappend
 
 # 6. Atualizar menus de boot
-echo "[+] Atualizando menus isolinux e grub..."
+echo "[+] Atualizando menus de boot..."
 sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/isolinux/isolinux.cfg"
-sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/boot/grub/grub.cfg"
+if [ -f "$WORK_DIR/iso-root/boot/grub/grub.cfg" ]; then
+    sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/boot/grub/grub.cfg"
+fi
+if [ -f "$WORK_DIR/iso-root/efi/boot/grub.cfg" ]; then
+    sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/efi/boot/grub.cfg"
+    sed -i "s/Etidroid VER/Etidroid $VERSION_TAG/g" "$WORK_DIR/iso-root/efi/boot/grub.cfg"
+    sed -i 's/CMDLINE/androidboot.hardware=android_x86/g' "$WORK_DIR/iso-root/efi/boot/grub.cfg"
+fi
 
 # 7. Gerar ISO bootavel hibrida com xorriso
 echo "[+] Gerando ISO final $OUTPUT_ISO com xorriso..."
-xorriso -as mkisofs \
-  -V 'Etidroid LiveCD' \
-  -r -J -l \
-  -isohybrid-mbr --interval:local_fs:0s-15s:zero_mbrpt,zero_gpt:"$BASE_ISO" \
-  -partition_cyl_align on \
-  -partition_offset 0 \
-  -partition_hd_cyl 64 \
-  -partition_sec_hd 32 \
-  --mbr-force-bootable \
-  --gpt-iso-not-ro \
-  -iso_mbr_part_type 0x00 \
-  -c '/isolinux/boot.cat' \
-  -b '/isolinux/isolinux.bin' \
-  -no-emul-boot \
-  -boot-load-size 4 \
-  -boot-info-table \
-  -eltorito-alt-boot \
-  -e '/boot/grub/efi.img' \
-  -no-emul-boot \
-  -boot-load-size 6144 \
-  -isohybrid-gpt-basdat \
-  -o "$OUTPUT_ISO" \
-  "$WORK_DIR/iso-root"
+if [ "$IS_EFI_DUAL" = true ]; then
+  xorriso -as mkisofs \
+    -V 'Etidroid LiveCD' \
+    -r -J -l \
+    -isohybrid-mbr --interval:local_fs:0s-15s:zero_mbrpt,zero_gpt:"$BASE_ISO" \
+    -partition_cyl_align on \
+    -partition_offset 0 \
+    -partition_hd_cyl 64 \
+    -partition_sec_hd 32 \
+    --mbr-force-bootable \
+    --gpt-iso-not-ro \
+    -iso_mbr_part_type 0x00 \
+    -c '/isolinux/boot.cat' \
+    -b '/isolinux/isolinux.bin' \
+    -no-emul-boot \
+    -boot-load-size 4 \
+    -boot-info-table \
+    -eltorito-alt-boot \
+    -e '/boot/grub/efi.img' \
+    -no-emul-boot \
+    -boot-load-size 6144 \
+    -isohybrid-gpt-basdat \
+    -o "$OUTPUT_ISO" \
+    "$WORK_DIR/iso-root"
+else
+  xorriso -as mkisofs \
+    -V 'Etidroid LiveCD' \
+    -r -J -l \
+    -isohybrid-mbr --interval:local_fs:0s-15s:zero_mbrpt:"$BASE_ISO" \
+    -partition_cyl_align on \
+    -partition_offset 0 \
+    -partition_hd_cyl 64 \
+    -partition_sec_hd 32 \
+    --mbr-force-bootable \
+    -iso_mbr_part_type 0x17 \
+    -c '/isolinux/boot.cat' \
+    -b '/isolinux/isolinux.bin' \
+    -no-emul-boot \
+    -boot-load-size 4 \
+    -boot-info-table \
+    -o "$OUTPUT_ISO" \
+    "$WORK_DIR/iso-root"
+fi
 
 rm -rf "$WORK_DIR"
 echo "=== Sucesso! ISO gerada: $OUTPUT_ISO ==="
