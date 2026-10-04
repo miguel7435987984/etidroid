@@ -1,0 +1,45 @@
+name: Build and Release Etidroid ISO
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg squashfs-tools xorriso p7zip-full e2fsprogs zip curl
+
+      - name: Build Etidroid ISO
+        run: ./build.sh
+
+      - name: Generate Checksums
+        run: |
+          sha256sum etidroid-4.4-r5.iso > etidroid-4.4-r5.iso.sha256
+          md5sum etidroid-4.4-r5.iso > etidroid-4.4-r5.iso.md5
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'v1.0.0' }}
+          name: Etidroid ${{ github.ref_type == 'tag' && github.ref_name || 'v1.0.0' }}
+          draft: false
+          prerelease: false
+          files: |
+            etidroid-4.4-r5.iso
+            etidroid-4.4-r5.iso.sha256
+            etidroid-4.4-r5.iso.md5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

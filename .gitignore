@@ -1,0 +1,7 @@
+*.iso
+*.img
+*.sfs
+build_tmp/
+work/
+*.sha256
+*.md5
