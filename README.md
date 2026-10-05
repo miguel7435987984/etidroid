@@ -10,6 +10,7 @@ Sistema operacional baseado no **Android-x86** com bootanimation customizado.
 
 ## Recursos
 - Bootanimation customizado em 1280x720 24fps
+- Wallpaper padrão Etidroid em 1080p integrado ao sistema
 - Suporte a boot híbrido (BIOS MBR e UEFI GPT)
 - Identificação do produto ajustada para Etidroid
 

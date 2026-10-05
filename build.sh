@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK_DIR="${SCRIPT_DIR}/build_tmp"
 TARGET="${1:-4.4}"
 VIDEO_INPUT="${SCRIPT_DIR}/assets/bootanimation.mp4"
+WALLPAPER_INPUT="${SCRIPT_DIR}/assets/wallpaper.jpg"
 
 case "$TARGET" in
   4.4|4.4-r5)
@@ -103,6 +104,10 @@ sed -i 's/ro.product.model=Generic Android-x86_64/ro.product.model=Etidroid/g' "
 sed -i 's/ro.product.model=Generic Android-x86/ro.product.model=Etidroid/g' "$WORK_DIR/build.prop"
 sed -i 's/ro.product.brand=Android-x86/ro.product.brand=Etidroid/g' "$WORK_DIR/build.prop"
 sed -i "s/ro.build.display.id=.*/ro.build.display.id=Etidroid $VERSION_TAG/g" "$WORK_DIR/build.prop"
+sed -i '/ro.config.wallpaper/d' "$WORK_DIR/build.prop"
+sed -i '/ro.config.lock_wallpaper/d' "$WORK_DIR/build.prop"
+echo "ro.config.wallpaper=/system/media/default_wallpaper.jpg" >> "$WORK_DIR/build.prop"
+echo "ro.config.lock_wallpaper=/system/media/default_wallpaper.jpg" >> "$WORK_DIR/build.prop"
 
 echo "[+] Injetando arquivos no system.img via debugfs..."
 debugfs -w -R "rm media/bootanimation.zip" "$IMG" 2>/dev/null || true
@@ -111,6 +116,23 @@ debugfs -w -R "sif media/bootanimation.zip mode 0100644" "$IMG"
 debugfs -w -R "sif media/bootanimation.zip uid 0" "$IMG"
 debugfs -w -R "sif media/bootanimation.zip gid 0" "$IMG"
 debugfs -w -R "ea_set media/bootanimation.zip security.selinux u:object_r:system_file:s0\000" "$IMG"
+
+if [ -f "$WALLPAPER_INPUT" ]; then
+    echo "[+] Injetando wallpaper padrão no system.img..."
+    debugfs -w -R "rm media/default_wallpaper.jpg" "$IMG" 2>/dev/null || true
+    debugfs -w -R "write \"$WALLPAPER_INPUT\" media/default_wallpaper.jpg" "$IMG"
+    debugfs -w -R "sif media/default_wallpaper.jpg mode 0100644" "$IMG"
+    debugfs -w -R "sif media/default_wallpaper.jpg uid 0" "$IMG"
+    debugfs -w -R "sif media/default_wallpaper.jpg gid 0" "$IMG"
+    debugfs -w -R "ea_set media/default_wallpaper.jpg security.selinux u:object_r:system_file:s0\000" "$IMG"
+
+    debugfs -w -R "rm etc/default_wallpaper.jpg" "$IMG" 2>/dev/null || true
+    debugfs -w -R "write \"$WALLPAPER_INPUT\" etc/default_wallpaper.jpg" "$IMG"
+    debugfs -w -R "sif etc/default_wallpaper.jpg mode 0100644" "$IMG"
+    debugfs -w -R "sif etc/default_wallpaper.jpg uid 0" "$IMG"
+    debugfs -w -R "sif etc/default_wallpaper.jpg gid 0" "$IMG"
+    debugfs -w -R "ea_set etc/default_wallpaper.jpg security.selinux u:object_r:system_file:s0\000" "$IMG"
+fi
 
 debugfs -w -R "rm build.prop" "$IMG"
 debugfs -w -R "write \"$WORK_DIR/build.prop\" build.prop" "$IMG"
