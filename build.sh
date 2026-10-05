@@ -37,8 +37,18 @@ case "$TARGET" in
     EXPAND_SIZE="2600M"
     VOL_ID="Etidroid 7.1-r5 (x86_64)"
     ;;
+  8.1|8.1-r6)
+    VERSION_TAG="8.1-r6"
+    BASE_ISO_NAME="android-x86_64-8.1-r6.iso"
+    BASE_ISO_URL="https://downloads.sourceforge.net/project/android-x86/Release%208.1/android-x86_64-8.1-r6.iso"
+    OUTPUT_ISO="${SCRIPT_DIR}/etidroid-8.1-r6.iso"
+    IS_EFI_DUAL=true
+    EFI_LOAD_SIZE=8192
+    EXPAND_SIZE="2600M"
+    VOL_ID="Etidroid 8.1-r6 (x86_64)"
+    ;;
   *)
-    echo "Uso: $0 [4.4|5.1|7.1]"
+    echo "Uso: $0 [4.4|5.1|7.1|8.1]"
     exit 1
     ;;
 esac
