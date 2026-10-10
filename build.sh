@@ -58,8 +58,18 @@ case "$TARGET" in
     EXPAND_SIZE="2800M"
     VOL_ID="Etidroid 9.0-r2-k49 (x86_64)"
     ;;
+  10.0|10|10.0-20200225)
+    VERSION_TAG="10.0"
+    BASE_ISO_NAME="android-x86_64-10.0-20200225.iso"
+    BASE_ISO_URL="https://archive.org/download/androidx86-10-isos/Android%2010%20x64%20%28User%29.iso"
+    OUTPUT_ISO="${SCRIPT_DIR}/etidroid-10.0.iso"
+    IS_EFI_DUAL=true
+    EFI_LOAD_SIZE=8192
+    EXPAND_SIZE="3400M"
+    VOL_ID="Etidroid 10.0 (x86_64)"
+    ;;
   *)
-    echo "Uso: $0 [4.4|5.1|7.1|8.1|9.0]"
+    echo "Uso: $0 [4.4|5.1|7.1|8.1|9.0|10.0]"
     exit 1
     ;;
 esac
@@ -108,11 +118,23 @@ truncate -s "$EXPAND_SIZE" "$IMG"
 e2fsck -f -y "$IMG" || true
 resize2fs "$IMG"
 
-echo "[+] Extraindo e ajustando build.prop..."
-debugfs -R "dump build.prop \"$WORK_DIR/build.prop\"" "$IMG"
+echo "[+] Verificando estrutura do system.img (SAR vs Legacy)..."
+PROP_PATH="build.prop"
+IS_SAR=false
+if debugfs -R "stat system/build.prop" "$IMG" 2>&1 | grep -q "Inode:"; then
+    IS_SAR=true
+    PROP_PATH="system/build.prop"
+    echo "[+] Detectado layout System-as-Root (SAR). Usando $PROP_PATH."
+else
+    echo "[+] Detectado layout tradicional (Non-SAR). Usando $PROP_PATH."
+fi
+
+echo "[+] Extraindo e ajustando $PROP_PATH..."
+debugfs -R "dump $PROP_PATH \"$WORK_DIR/build.prop\"" "$IMG"
 sed -i 's/ro.product.model=Generic Android-x86_64/ro.product.model=Etidroid/g' "$WORK_DIR/build.prop"
 sed -i 's/ro.product.model=Generic Android-x86/ro.product.model=Etidroid/g' "$WORK_DIR/build.prop"
 sed -i 's/ro.product.brand=Android-x86/ro.product.brand=Etidroid/g' "$WORK_DIR/build.prop"
+sed -i 's/ro.product.system.brand=Android-x86/ro.product.system.brand=Etidroid/g' "$WORK_DIR/build.prop"
 sed -i "s/ro.build.display.id=.*/ro.build.display.id=Etidroid $VERSION_TAG/g" "$WORK_DIR/build.prop"
 sed -i '/ro.config.wallpaper/d' "$WORK_DIR/build.prop"
 sed -i '/ro.config.lock_wallpaper/d' "$WORK_DIR/build.prop"
@@ -120,36 +142,60 @@ echo "ro.config.wallpaper=/system/media/default_wallpaper.jpg" >> "$WORK_DIR/bui
 echo "ro.config.lock_wallpaper=/system/media/default_wallpaper.jpg" >> "$WORK_DIR/build.prop"
 
 echo "[+] Injetando arquivos no system.img via debugfs..."
-debugfs -w -R "rm media/bootanimation.zip" "$IMG" 2>/dev/null || true
-debugfs -w -R "write \"$WORK_DIR/bootanimation.zip\" media/bootanimation.zip" "$IMG"
-debugfs -w -R "sif media/bootanimation.zip mode 0100644" "$IMG"
-debugfs -w -R "sif media/bootanimation.zip uid 0" "$IMG"
-debugfs -w -R "sif media/bootanimation.zip gid 0" "$IMG"
-debugfs -w -R "ea_set media/bootanimation.zip security.selinux u:object_r:system_file:s0\000" "$IMG"
+if [ "$IS_SAR" = true ]; then
+    debugfs -w -R "mkdir system/media" "$IMG" 2>/dev/null || true
+    debugfs -w -R "sif system/media mode 040755" "$IMG" 2>/dev/null || true
+    debugfs -w -R "sif system/media uid 0" "$IMG" 2>/dev/null || true
+    debugfs -w -R "sif system/media gid 0" "$IMG" 2>/dev/null || true
+    debugfs -w -R "ea_set system/media security.selinux u:object_r:system_file:s0\000" "$IMG" 2>/dev/null || true
 
-if [ -f "$WALLPAPER_INPUT" ]; then
-    echo "[+] Injetando wallpaper padrão no system.img..."
-    debugfs -w -R "rm media/default_wallpaper.jpg" "$IMG" 2>/dev/null || true
-    debugfs -w -R "write \"$WALLPAPER_INPUT\" media/default_wallpaper.jpg" "$IMG"
-    debugfs -w -R "sif media/default_wallpaper.jpg mode 0100644" "$IMG"
-    debugfs -w -R "sif media/default_wallpaper.jpg uid 0" "$IMG"
-    debugfs -w -R "sif media/default_wallpaper.jpg gid 0" "$IMG"
-    debugfs -w -R "ea_set media/default_wallpaper.jpg security.selinux u:object_r:system_file:s0\000" "$IMG"
+    for anim_dest in "system/media/bootanimation.zip" "system/product/media/bootanimation.zip"; do
+        debugfs -w -R "rm $anim_dest" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"$WORK_DIR/bootanimation.zip\" $anim_dest" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif $anim_dest mode 0100644" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif $anim_dest uid 0" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif $anim_dest gid 0" "$IMG" 2>/dev/null || true
+        debugfs -w -R "ea_set $anim_dest security.selinux u:object_r:system_file:s0\000" "$IMG" 2>/dev/null || true
+    done
 
-    debugfs -w -R "rm etc/default_wallpaper.jpg" "$IMG" 2>/dev/null || true
-    debugfs -w -R "write \"$WALLPAPER_INPUT\" etc/default_wallpaper.jpg" "$IMG"
-    debugfs -w -R "sif etc/default_wallpaper.jpg mode 0100644" "$IMG"
-    debugfs -w -R "sif etc/default_wallpaper.jpg uid 0" "$IMG"
-    debugfs -w -R "sif etc/default_wallpaper.jpg gid 0" "$IMG"
-    debugfs -w -R "ea_set etc/default_wallpaper.jpg security.selinux u:object_r:system_file:s0\000" "$IMG"
+    if [ -f "$WALLPAPER_INPUT" ]; then
+        echo "[+] Injetando wallpaper padrão no system.img (SAR)..."
+        for wall_dest in "system/media/default_wallpaper.jpg" "system/product/media/default_wallpaper.jpg" "system/etc/default_wallpaper.jpg"; do
+            debugfs -w -R "rm $wall_dest" "$IMG" 2>/dev/null || true
+            debugfs -w -R "write \"$WALLPAPER_INPUT\" $wall_dest" "$IMG" 2>/dev/null || true
+            debugfs -w -R "sif $wall_dest mode 0100644" "$IMG" 2>/dev/null || true
+            debugfs -w -R "sif $wall_dest uid 0" "$IMG" 2>/dev/null || true
+            debugfs -w -R "sif $wall_dest gid 0" "$IMG" 2>/dev/null || true
+            debugfs -w -R "ea_set $wall_dest security.selinux u:object_r:system_file:s0\000" "$IMG" 2>/dev/null || true
+        done
+    fi
+else
+    debugfs -w -R "rm media/bootanimation.zip" "$IMG" 2>/dev/null || true
+    debugfs -w -R "write \"$WORK_DIR/bootanimation.zip\" media/bootanimation.zip" "$IMG"
+    debugfs -w -R "sif media/bootanimation.zip mode 0100644" "$IMG"
+    debugfs -w -R "sif media/bootanimation.zip uid 0" "$IMG"
+    debugfs -w -R "sif media/bootanimation.zip gid 0" "$IMG"
+    debugfs -w -R "ea_set media/bootanimation.zip security.selinux u:object_r:system_file:s0\000" "$IMG"
+
+    if [ -f "$WALLPAPER_INPUT" ]; then
+        echo "[+] Injetando wallpaper padrão no system.img..."
+        for wall_dest in "media/default_wallpaper.jpg" "etc/default_wallpaper.jpg"; do
+            debugfs -w -R "rm $wall_dest" "$IMG" 2>/dev/null || true
+            debugfs -w -R "write \"$WALLPAPER_INPUT\" $wall_dest" "$IMG" 2>/dev/null || true
+            debugfs -w -R "sif $wall_dest mode 0100644" "$IMG" 2>/dev/null || true
+            debugfs -w -R "sif $wall_dest uid 0" "$IMG" 2>/dev/null || true
+            debugfs -w -R "sif $wall_dest gid 0" "$IMG" 2>/dev/null || true
+            debugfs -w -R "ea_set $wall_dest security.selinux u:object_r:system_file:s0\000" "$IMG" 2>/dev/null || true
+        done
+    fi
 fi
 
-debugfs -w -R "rm build.prop" "$IMG"
-debugfs -w -R "write \"$WORK_DIR/build.prop\" build.prop" "$IMG"
-debugfs -w -R "sif build.prop mode 0100644" "$IMG"
-debugfs -w -R "sif build.prop uid 0" "$IMG"
-debugfs -w -R "sif build.prop gid 0" "$IMG"
-debugfs -w -R "ea_set build.prop security.selinux u:object_r:system_file:s0\000" "$IMG"
+debugfs -w -R "rm $PROP_PATH" "$IMG"
+debugfs -w -R "write \"$WORK_DIR/build.prop\" $PROP_PATH" "$IMG"
+debugfs -w -R "sif $PROP_PATH mode 0100644" "$IMG"
+debugfs -w -R "sif $PROP_PATH uid 0" "$IMG"
+debugfs -w -R "sif $PROP_PATH gid 0" "$IMG"
+debugfs -w -R "ea_set $PROP_PATH security.selinux u:object_r:system_file:s0\000" "$IMG"
 
 echo "[+] Otimizando tamanho do system.img..."
 e2fsck -f -y "$IMG" || true
