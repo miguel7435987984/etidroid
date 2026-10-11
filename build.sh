@@ -116,18 +116,24 @@ if [ -f "$WORK_DIR/iso-root/install.img" ] && [ -f "${SCRIPT_DIR}/assets/install
     cp "${SCRIPT_DIR}/assets/installer/1-install" "$WORK_DIR/install-root/scripts/1-install"
     chmod +x "$WORK_DIR/install-root/scripts/1-install"
     (cd "$WORK_DIR/install-root" && find . | cpio -H newc -o 2>/dev/null | gzip -9 > "$WORK_DIR/iso-root/install.img")
-    rm -rf "$WORK_DIR/install-root"
 fi
 
 if [ -f "$WORK_DIR/iso-root/initrd.img" ] && [ -f "${SCRIPT_DIR}/assets/installer/1-install" ]; then
-    echo "[+] Injetando script do instalador em initrd.img..."
+    echo "[+] Integrando instalador completo e binarios diretamente em initrd.img..."
     mkdir -p "$WORK_DIR/initrd-root"
     (cd "$WORK_DIR/initrd-root" && zcat "$WORK_DIR/iso-root/initrd.img" | cpio -idmv >/dev/null 2>&1)
+    if [ -d "$WORK_DIR/install-root" ]; then
+        cp -a "$WORK_DIR/install-root/"* "$WORK_DIR/initrd-root/"
+    fi
     mkdir -p "$WORK_DIR/initrd-root/scripts"
     cp "${SCRIPT_DIR}/assets/installer/1-install" "$WORK_DIR/initrd-root/scripts/1-install"
     chmod +x "$WORK_DIR/initrd-root/scripts/1-install"
+    sed -i 's/rm \/sbin\/mke2fs/# rm \/sbin\/mke2fs/g' "$WORK_DIR/initrd-root/init" 2>/dev/null || true
+    for tool in mke2fs mkfs.ext2 mkfs.ext3 mkfs.ext4 tune2fs; do
+        ln -sf busybox "$WORK_DIR/initrd-root/bin/$tool" 2>/dev/null || true
+    done
     (cd "$WORK_DIR/initrd-root" && find . | cpio -H newc -o 2>/dev/null | gzip -9 > "$WORK_DIR/iso-root/initrd.img")
-    rm -rf "$WORK_DIR/initrd-root"
+    rm -rf "$WORK_DIR/initrd-root" "$WORK_DIR/install-root"
 fi
 
 # 4. Extrair e modificar system.img
@@ -244,8 +250,19 @@ if [ -f "$WORK_DIR/iso-root/efi/boot/grub.cfg" ]; then
 fi
 if [ -f "$WORK_DIR/iso-root/efi/boot/android.cfg" ]; then
     sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
+    sed -i 's/shift 3/shift 2/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
     sed -i 's/if \[ -s ($android)$kdir\/install\.img \]; then/if true; then/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
-    sed -i '/add_entry "\$live" quiet/a \add_entry "Installation - Install Etidroid to harddisk" INSTALL=1' "$WORK_DIR/iso-root/efi/boot/android.cfg"
+    sed -i '/add_entry "\$live" quiet/a \
+\
+menuentry "Installation - Install Etidroid to harddisk" --class android-x86 {\
+	savedefault\
+	set root=$android\
+	if [ ! -e $kdir/kernel ]; then\
+		search --no-floppy --set root -f $kdir/kernel\
+	fi\
+	linux $kdir/kernel root=/dev/ram0 $src INSTALL=1\
+	initrd $kdir/initrd.img\
+}' "$WORK_DIR/iso-root/efi/boot/android.cfg"
     sed -i '/add_entry "Installation" INSTALL=1/d' "$WORK_DIR/iso-root/efi/boot/android.cfg"
 fi
 
