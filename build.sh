@@ -221,6 +221,9 @@ if [ -f "$WORK_DIR/iso-root/efi/boot/grub.cfg" ]; then
 fi
 if [ -f "$WORK_DIR/iso-root/efi/boot/android.cfg" ]; then
     sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
+    sed -i 's/if \[ -s ($android)$kdir\/install\.img \]; then/if true; then/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
+    sed -i '/add_entry "\$live" quiet/a \add_entry "Installation - Install Etidroid to harddisk" INSTALL=1' "$WORK_DIR/iso-root/efi/boot/android.cfg"
+    sed -i '/add_entry "Installation" INSTALL=1/d' "$WORK_DIR/iso-root/efi/boot/android.cfg"
 fi
 
 # 7. Gerar ISO bootavel hibrida com xorriso
