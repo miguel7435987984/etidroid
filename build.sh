@@ -107,6 +107,34 @@ mkdir -p "$WORK_DIR/iso-root"
 rm -rf "$WORK_DIR/iso-root/[BOOT]"
 find "$WORK_DIR/iso-root" -name "TRANS.TBL" -delete
 
+# Garantir script de instalacao completo em install.img e initrd.img
+if [ -f "$WORK_DIR/iso-root/install.img" ] && [ -f "${SCRIPT_DIR}/assets/installer/1-install" ]; then
+    if ! zcat "$WORK_DIR/iso-root/install.img" | cpio -it 2>/dev/null | grep -q "scripts/1-install"; then
+        echo "[+] Injetando script do instalador em install.img..."
+        mkdir -p "$WORK_DIR/install-root"
+        (cd "$WORK_DIR/install-root" && zcat "$WORK_DIR/iso-root/install.img" | cpio -idmv >/dev/null 2>&1)
+        mkdir -p "$WORK_DIR/install-root/scripts"
+        cp "${SCRIPT_DIR}/assets/installer/1-install" "$WORK_DIR/install-root/scripts/1-install"
+        chmod +x "$WORK_DIR/install-root/scripts/1-install"
+        (cd "$WORK_DIR/install-root" && find . | cpio -H newc -o 2>/dev/null | gzip -9 > "$WORK_DIR/iso-root/install.img")
+        rm -rf "$WORK_DIR/install-root"
+    fi
+fi
+
+if [ -f "$WORK_DIR/iso-root/initrd.img" ] && [ -f "${SCRIPT_DIR}/assets/installer/1-install" ]; then
+    mkdir -p "$WORK_DIR/initrd-root"
+    (cd "$WORK_DIR/initrd-root" && zcat "$WORK_DIR/iso-root/initrd.img" | cpio -idmv >/dev/null 2>&1)
+    if [ -f "$WORK_DIR/initrd-root/scripts/1-install" ]; then
+        if grep -q "installer is not available" "$WORK_DIR/initrd-root/scripts/1-install"; then
+            echo "[+] Atualizando scripts/1-install em initrd.img..."
+            cp "${SCRIPT_DIR}/assets/installer/1-install" "$WORK_DIR/initrd-root/scripts/1-install"
+            chmod +x "$WORK_DIR/initrd-root/scripts/1-install"
+            (cd "$WORK_DIR/initrd-root" && find . | cpio -H newc -o 2>/dev/null | gzip -9 > "$WORK_DIR/iso-root/initrd.img")
+        fi
+    fi
+    rm -rf "$WORK_DIR/initrd-root"
+fi
+
 # 4. Extrair e modificar system.img
 echo "[+] Descompactando system.sfs..."
 mkdir -p "$WORK_DIR/sfs-root"
