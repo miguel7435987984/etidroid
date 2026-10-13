@@ -6,6 +6,16 @@
 # with Etidroid project.
 #
 
+set +x
+export LC_ALL=C
+export LANG=C
+export TERM=linux
+export TERMINFO=/lib/terminfo
+export TERMINFO_DIRS=/lib/terminfo:/usr/share/terminfo:/etc/terminfo
+export LD_LIBRARY_PATH=/lib:/usr/lib:$LD_LIBRARY_PATH
+export PATH=/sbin:/bin:/usr/bin:/usr/sbin:$PATH
+mkdir -p /tmp 2>/dev/null || true
+
 tempfile=/tmp/temp-$$
 menufile=/tmp/menu-$$
 
@@ -214,7 +224,11 @@ format_fs()
 	choose "Choose filesystem" "Please select a filesystem to format $1:"
 	case "$choice" in
 		ext4)
-			cmd="mke2fs -F -L"
+			if mke2fs -V 2>&1 | grep -q "mke2fs 1\."; then
+				cmd="mke2fs -F -t ext4 -O ^64bit,^metadata_csum,^huge_file -I 128 -L"
+			else
+				cmd="mke2fs -F -I 128 -L"
+			fi
 			;;
 		ntfs)
 			cmd="mkntfs -fL"
@@ -246,13 +260,14 @@ create_entry()
 {
 	title=$1
 	shift
-	echo -e "title $title\n\tkernel /$asrc/kernel$vga $@ SRC=/$asrc\n\tinitrd /$asrc/initrd.img\n" >> $menulst
+	echo -e "title $title\n\tkernel /$asrc/kernel${vga:+ $vga} $@ SRC=/$asrc\n\tinitrd /$asrc/initrd.img\n" >> $menulst
 }
 
 create_menulst()
 {
 	menulst=/hd/grub/menu.lst
-	[ -n "$VESA" ] && vga=" vga=788 modeset=0"
+	vga=""
+	[ -n "$VESA" ] && vga="vga=788 modeset=0"
 	echo -e "${GRUB_OPTIONS:-default=0\ntimeout=6\nsplashimage=/grub/android-x86.xpm.gz\n}root (hd0,$1)\n" > $menulst
 
 	create_entry "$OS_TITLE $VER" quiet $cmdline
@@ -400,7 +415,10 @@ install_to()
 	done
 
 	fs=`cat /proc/mounts | grep /dev/$1 | awk '{ print $3 }'`
-	cmdline=`sed "s|\(initrd.*img\s*\)||; s|quiet\s*||; s|\(vga=\w\+\?\s*\)||; s|\(DPI=\w\+\?\s*\)||; s|\(AUTO_INSTALL=\w\+\?\s*\)||; s|\(INSTALL=\w\+\?\s*\)||; s|\(SRC=\S\+\?\s*\)||; s|\(DEBUG=\w\+\?\s*\)||; s|\(BOOT_IMAGE=\S\+\?\s*\)||; s|\(iso-scan/filename=\S\+\?\s*\)||; s|[[:space:]]*$||" /proc/cmdline`
+	cmdline=`sed "s|\(initrd.*img\s*\)||; s|quiet\s*||; s|\(vga=\w\+\?\s*\)||; s|\(DPI=\w\+\?\s*\)||; s|\(AUTO_INSTALL=\w\+\?\s*\)||; s|\(INSTALL=\w\+\?\s*\)||; s|\(SRC=\S\+\?\s*\)||; s|\(DEBUG=\w\+\?\s*\)||; s|\(BOOT_IMAGE=\S\+\?\s*\)||; s|\(iso-scan/filename=\S\+\?\s*\)||; s|\(nomodeset\s*\)||; s|[[:space:]]*$||" /proc/cmdline`
+	if ! echo "$cmdline" | grep -q "androidboot.hardware"; then
+		cmdline="$cmdline androidboot.hardware=android_x86"
+	fi
 
 	[ -n "$INSTALL_PREFIX" ] && asrc=$INSTALL_PREFIX || asrc=android-$VER
 	set_answer_if_auto 1
@@ -562,7 +580,11 @@ install_hd()
 			;;
 	esac
 
-	select_dev || rebooting
+	if ! select_dev; then
+		dialog --title " Notice " --yes-label "Retry" --no-label "Reboot" --yesno \
+			"\nNo partition selected or cancelled.\nRetry partition selection?" 8 50
+		[ $? -eq 0 ] && return 1 || rebooting
+	fi
 	retval=1
 	case "$choice" in
 		Create*)
@@ -584,7 +606,10 @@ do_install()
 {
 	booted_from=`basename $dev`
 	efi=$(cat /sys/firmware/efi/fw_platform_size 2> /dev/null)
-	[ -n "$efi" ] && mount -t efivarfs none /sys/firmware/efi/efivars
+	if [ -n "$efi" ]; then
+		mkdir -p /sys/firmware/efi/efivars 2>/dev/null || true
+		mountpoint -q /sys/firmware/efi/efivars || mount -t efivarfs none /sys/firmware/efi/efivars 2>/dev/null || true
+	fi
 
 	until install_hd; do
 		if [ $retval -eq 255 ]; then

@@ -111,26 +111,114 @@ find "$WORK_DIR/iso-root" -name "TRANS.TBL" -delete
 if [ -f "$WORK_DIR/iso-root/install.img" ] && [ -f "${SCRIPT_DIR}/assets/installer/1-install" ]; then
     echo "[+] Injetando script do instalador em install.img..."
     mkdir -p "$WORK_DIR/install-root"
-    (cd "$WORK_DIR/install-root" && zcat "$WORK_DIR/iso-root/install.img" | cpio -idmv >/dev/null 2>&1)
+    (cd "$WORK_DIR/install-root" && gzip -dc "$WORK_DIR/iso-root/install.img" | cpio -idmv >/dev/null 2>&1)
     mkdir -p "$WORK_DIR/install-root/scripts"
     cp "${SCRIPT_DIR}/assets/installer/1-install" "$WORK_DIR/install-root/scripts/1-install"
     chmod +x "$WORK_DIR/install-root/scripts/1-install"
+
+    # Criar aliases de terminfo em install.img
+    for t in x/xterm x/xterm-256color v/vt100 v/vt220 a/ansi u/unknown d/dumb s/screen; do
+        mkdir -p "$WORK_DIR/install-root/lib/terminfo/$(dirname $t)"
+        ln -sf ../l/linux "$WORK_DIR/install-root/lib/terminfo/$t" 2>/dev/null || true
+    done
+    mkdir -p "$WORK_DIR/install-root/usr/share" "$WORK_DIR/install-root/etc"
+    ln -sf /lib/terminfo "$WORK_DIR/install-root/usr/share/terminfo" 2>/dev/null || true
+    ln -sf /lib/terminfo "$WORK_DIR/install-root/etc/terminfo" 2>/dev/null || true
+    if [ -f "$WORK_DIR/install-root/bin/ld-linux.so.2" ]; then
+        cp -f "$WORK_DIR/install-root/bin/ld-linux.so.2" "$WORK_DIR/install-root/lib/ld-linux.so.2" 2>/dev/null || true
+    fi
+
     (cd "$WORK_DIR/install-root" && find . | cpio -H newc -o 2>/dev/null | gzip -9 > "$WORK_DIR/iso-root/install.img")
 fi
 
 if [ -f "$WORK_DIR/iso-root/initrd.img" ] && [ -f "${SCRIPT_DIR}/assets/installer/1-install" ]; then
     echo "[+] Integrando instalador completo e binarios diretamente em initrd.img..."
     mkdir -p "$WORK_DIR/initrd-root"
-    (cd "$WORK_DIR/initrd-root" && zcat "$WORK_DIR/iso-root/initrd.img" | cpio -idmv >/dev/null 2>&1)
+    (cd "$WORK_DIR/initrd-root" && gzip -dc "$WORK_DIR/iso-root/initrd.img" | cpio -idmv >/dev/null 2>&1)
     if [ -d "$WORK_DIR/install-root" ]; then
         cp -a "$WORK_DIR/install-root/"* "$WORK_DIR/initrd-root/"
     fi
     mkdir -p "$WORK_DIR/initrd-root/scripts"
     cp "${SCRIPT_DIR}/assets/installer/1-install" "$WORK_DIR/initrd-root/scripts/1-install"
     chmod +x "$WORK_DIR/initrd-root/scripts/1-install"
-    sed -i 's/rm \/sbin\/mke2fs/# rm \/sbin\/mke2fs/g' "$WORK_DIR/initrd-root/init" 2>/dev/null || true
-    for tool in mke2fs mkfs.ext2 mkfs.ext3 mkfs.ext4 tune2fs; do
+
+    # Criar aliases de terminfo em initrd.img para compatibilidade com ncurses/dialog
+    for t in x/xterm x/xterm-256color v/vt100 v/vt220 a/ansi u/unknown d/dumb s/screen; do
+        mkdir -p "$WORK_DIR/initrd-root/lib/terminfo/$(dirname $t)"
+        ln -sf ../l/linux "$WORK_DIR/initrd-root/lib/terminfo/$t" 2>/dev/null || true
+    done
+    mkdir -p "$WORK_DIR/initrd-root/usr/share" "$WORK_DIR/initrd-root/etc"
+    ln -sf /lib/terminfo "$WORK_DIR/initrd-root/usr/share/terminfo" 2>/dev/null || true
+    ln -sf /lib/terminfo "$WORK_DIR/initrd-root/etc/terminfo" 2>/dev/null || true
+    if [ -f "$WORK_DIR/initrd-root/bin/ld-linux.so.2" ]; then
+        cp -f "$WORK_DIR/initrd-root/bin/ld-linux.so.2" "$WORK_DIR/initrd-root/lib/ld-linux.so.2" 2>/dev/null || true
+    fi
+
+    # Patch /init para garantir exportacao de variaveis de ambiente e leitura correta de cmdline
+    if [ -f "$WORK_DIR/initrd-root/init" ]; then
+        python3 -c '
+path = "'"$WORK_DIR"'/initrd-root/init"
+with open(path, "r") as f:
+    content = f.read()
+
+# 1. Neutralizar rm /sbin/mke2fs
+content = content.replace("rm /sbin/mke2fs", "# rm /sbin/mke2fs")
+
+# 2. Configurar variáveis de ambiente logo após PATH=/...
+env_block = """PATH=/sbin:/bin:/system/bin:/system/xbin; export PATH
+export LC_ALL=C
+export LANG=C
+export TERM=linux
+export TERMINFO=/lib/terminfo
+export TERMINFO_DIRS=/lib/terminfo:/usr/share/terminfo:/etc/terminfo"""
+
+if "export LC_ALL=C" not in content:
+    content = content.replace("PATH=/sbin:/bin:/system/bin:/system/xbin; export PATH", env_block)
+
+# 3. No early boot, logo após montar /proc e /sys, ler /proc/cmdline e garantir /dev/tty
+early_mount = """\tbusybox mount -t proc proc /proc
+\tbusybox mount -t sysfs sys /sys
+\tfor c in $(cat /proc/cmdline 2>/dev/null); do
+\t    case $c in
+\t        INSTALL|INSTALL=*) INSTALL=1; export INSTALL ;;
+\t        AUTO_INSTALL|AUTO_INSTALL=*) INSTALL=1; eval export "$c" ;;
+\t        DEBUG|DEBUG=*) eval export "$c" ;;
+\t    esac
+\tdone
+\ttest -c /dev/tty || mknod /dev/tty c 5 0"""
+
+if "for c in $(cat /proc/cmdline 2>/dev/null);" not in content:
+    content = content.replace("\tbusybox mount -t proc proc /proc\n\tbusybox mount -t sysfs sys /sys", early_mount)
+
+# 4. No exec env HAS_CTTY=Yes setsid cttyhack, repassar todas as variaveis necessarias
+content = content.replace(
+    "exec env HAS_CTTY=Yes setsid",
+    "exec env HAS_CTTY=Yes INSTALL=$INSTALL AUTO_INSTALL=$AUTO_INSTALL DEBUG=$DEBUG LC_ALL=C LANG=C TERM=linux TERMINFO=/lib/terminfo setsid"
+)
+
+# 5. Garantir que /src aponte confiavelmente para /mnt/$SRC
+content = content.replace("ln -s mnt/$SRC /src", "ln -sf /mnt/$SRC /src 2>/dev/null; ln -sf /mnt/$SRC /android/src 2>/dev/null || true")
+
+# 6. Garantir descompactacao de install.img usando busybox zcat caso zcat falhe
+content = content.replace(
+    "zcat /src/install.img",
+    "(busybox zcat /src/install.img 2>/dev/null || zcat /src/install.img 2>/dev/null || gzip -dc /src/install.img 2>/dev/null)"
+)
+
+# 7. Garantir limpeza de LD_LIBRARY_PATH antes de passar controle para Android init
+content = content.replace(
+    "exec ${SWITCH:-switch_root} /android /init",
+    "unset LD_LIBRARY_PATH\nexec ${SWITCH:-switch_root} /android /init"
+)
+
+with open(path, "w") as f:
+    f.write(content)
+'
+    fi
+
+    for tool in mke2fs mkfs.ext2 mkfs.ext3 mkfs.ext4 tune2fs fsck e2fsck zcat gzip gunzip dc setsid cttyhack clear; do
         ln -sf busybox "$WORK_DIR/initrd-root/bin/$tool" 2>/dev/null || true
+        ln -sf ../bin/busybox "$WORK_DIR/initrd-root/sbin/$tool" 2>/dev/null || true
     done
     (cd "$WORK_DIR/initrd-root" && find . | cpio -H newc -o 2>/dev/null | gzip -9 > "$WORK_DIR/iso-root/initrd.img")
     rm -rf "$WORK_DIR/initrd-root" "$WORK_DIR/install-root"
@@ -198,6 +286,38 @@ if [ "$IS_SAR" = true ]; then
             debugfs -w -R "ea_set $wall_dest security.selinux u:object_r:system_file:s0\000" "$IMG" 2>/dev/null || true
         done
     fi
+
+    echo "[+] Garantindo compatibilidade de init e hardware HAL para SAR (android_x86)..."
+    debugfs -R "dump init.android_x86_64.rc \"$WORK_DIR/init.rc.tmp\"" "$IMG" 2>/dev/null || true
+    if [ -f "$WORK_DIR/init.rc.tmp" ]; then
+        debugfs -w -R "rm init.android_x86.rc" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"$WORK_DIR/init.rc.tmp\" init.android_x86.rc" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif init.android_x86.rc mode 0100750" "$IMG" 2>/dev/null || true
+    fi
+    debugfs -R "dump fstab.android_x86_64 \"$WORK_DIR/fstab.tmp\"" "$IMG" 2>/dev/null || true
+    if [ -f "$WORK_DIR/fstab.tmp" ]; then
+        debugfs -w -R "rm fstab.android_x86" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"$WORK_DIR/fstab.tmp\" fstab.android_x86" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif fstab.android_x86 mode 0100640" "$IMG" 2>/dev/null || true
+    fi
+    debugfs -R "dump ueventd.android_x86_64.rc \"$WORK_DIR/ueventd.tmp\"" "$IMG" 2>/dev/null || true
+    if [ -f "$WORK_DIR/ueventd.tmp" ]; then
+        debugfs -w -R "rm ueventd.android_x86.rc" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"$WORK_DIR/ueventd.tmp\" ueventd.android_x86.rc" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif ueventd.android_x86.rc mode 0100644" "$IMG" 2>/dev/null || true
+    fi
+    debugfs -R "dump default.prop \"$WORK_DIR/default.prop\"" "$IMG" 2>/dev/null || true
+    if [ -f "$WORK_DIR/default.prop" ]; then
+        sed -i 's/pm.dexopt.first-boot=quicken/pm.dexopt.first-boot=verify/g' "$WORK_DIR/default.prop"
+        sed -i 's/ro.secure=1/ro.secure=0/g' "$WORK_DIR/default.prop"
+        sed -i 's/ro.adb.secure=1/ro.adb.secure=0/g' "$WORK_DIR/default.prop"
+        echo "ro.hardware.gralloc=gbm" >> "$WORK_DIR/default.prop"
+        echo "ro.hardware.hwcomposer=drm" >> "$WORK_DIR/default.prop"
+        echo "service.adb.tcp.port=5555" >> "$WORK_DIR/default.prop"
+        debugfs -w -R "rm default.prop" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"$WORK_DIR/default.prop\" default.prop" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif default.prop mode 0100600" "$IMG" 2>/dev/null || true
+    fi
 else
     debugfs -w -R "rm media/bootanimation.zip" "$IMG" 2>/dev/null || true
     debugfs -w -R "write \"$WORK_DIR/bootanimation.zip\" media/bootanimation.zip" "$IMG"
@@ -226,6 +346,51 @@ debugfs -w -R "sif $PROP_PATH uid 0" "$IMG"
 debugfs -w -R "sif $PROP_PATH gid 0" "$IMG"
 debugfs -w -R "ea_set $PROP_PATH security.selinux u:object_r:system_file:s0\000" "$IMG"
 
+# Injetar patches gráficos de compatibilidade (Mesa Gallium e HWC)
+if [ -d "${SCRIPT_DIR}/patches" ]; then
+    echo "[+] Injetando patches gráficos..."
+    if [ -f "${SCRIPT_DIR}/patches/gralloc.gbm.so" ]; then
+        debugfs -w -R "rm system/vendor/lib64/hw/gralloc.gbm.so" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"${SCRIPT_DIR}/patches/gralloc.gbm.so\" system/vendor/lib64/hw/gralloc.gbm.so" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif system/vendor/lib64/hw/gralloc.gbm.so mode 0100644" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif system/vendor/lib64/hw/gralloc.gbm.so uid 0" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif system/vendor/lib64/hw/gralloc.gbm.so gid 0" "$IMG" 2>/dev/null || true
+        debugfs -w -R "ea_set system/vendor/lib64/hw/gralloc.gbm.so security.selinux u:object_r:vendor_file:s0\000" "$IMG" 2>/dev/null || true
+    fi
+    if [ -f "${SCRIPT_DIR}/patches/libGLES_mesa_patched.so" ]; then
+        debugfs -w -R "rm system/vendor/lib64/egl/libGLES_mesa.so" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"${SCRIPT_DIR}/patches/libGLES_mesa_patched.so\" system/vendor/lib64/egl/libGLES_mesa.so" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif system/vendor/lib64/egl/libGLES_mesa.so mode 0100644" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif system/vendor/lib64/egl/libGLES_mesa.so uid 0" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif system/vendor/lib64/egl/libGLES_mesa.so gid 0" "$IMG" 2>/dev/null || true
+        debugfs -w -R "ea_set system/vendor/lib64/egl/libGLES_mesa.so security.selinux u:object_r:vendor_file:s0\000" "$IMG" 2>/dev/null || true
+    fi
+    if [ -f "${SCRIPT_DIR}/patches/libGLES_mesa_32_patched.so" ]; then
+        debugfs -w -R "rm system/vendor/lib/egl/libGLES_mesa.so" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"${SCRIPT_DIR}/patches/libGLES_mesa_32_patched.so\" system/vendor/lib/egl/libGLES_mesa.so" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif system/vendor/lib/egl/libGLES_mesa.so mode 0100644" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif system/vendor/lib/egl/libGLES_mesa.so uid 0" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif system/vendor/lib/egl/libGLES_mesa.so gid 0" "$IMG" 2>/dev/null || true
+        debugfs -w -R "ea_set system/vendor/lib/egl/libGLES_mesa.so security.selinux u:object_r:vendor_file:s0\000" "$IMG" 2>/dev/null || true
+    fi
+    if [ -f "${SCRIPT_DIR}/patches/libhwc2onfbadapter_patched.so" ]; then
+        debugfs -w -R "rm system/vendor/lib64/libhwc2onfbadapter.so" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"${SCRIPT_DIR}/patches/libhwc2onfbadapter_patched.so\" system/vendor/lib64/libhwc2onfbadapter.so" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif system/vendor/lib64/libhwc2onfbadapter.so mode 0100644" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif system/vendor/lib64/libhwc2onfbadapter.so uid 0" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif system/vendor/lib64/libhwc2onfbadapter.so gid 0" "$IMG" 2>/dev/null || true
+        debugfs -w -R "ea_set system/vendor/lib64/libhwc2onfbadapter.so security.selinux u:object_r:vendor_file:s0\000" "$IMG" 2>/dev/null || true
+    fi
+    if [ -f "${SCRIPT_DIR}/patches/libhwc2onfbadapter_32_patched.so" ]; then
+        debugfs -w -R "rm system/vendor/lib/libhwc2onfbadapter.so" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"${SCRIPT_DIR}/patches/libhwc2onfbadapter_32_patched.so\" system/vendor/lib/libhwc2onfbadapter.so" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif system/vendor/lib/libhwc2onfbadapter.so mode 0100644" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif system/vendor/lib/libhwc2onfbadapter.so uid 0" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif system/vendor/lib/libhwc2onfbadapter.so gid 0" "$IMG" 2>/dev/null || true
+        debugfs -w -R "ea_set system/vendor/lib/libhwc2onfbadapter.so security.selinux u:object_r:vendor_file:s0\000" "$IMG" 2>/dev/null || true
+    fi
+fi
+
 echo "[+] Otimizando tamanho do system.img..."
 e2fsck -f -y "$IMG" || true
 resize2fs -M "$IMG"
@@ -239,20 +404,42 @@ mksquashfs "$WORK_DIR/sfs-root" "$WORK_DIR/iso-root/system.sfs" -comp gzip -b 12
 echo "[+] Atualizando menus de boot..."
 if [ -f "$WORK_DIR/iso-root/isolinux/isolinux.cfg" ]; then
     sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/isolinux/isolinux.cfg"
+    sed -i 's/append initrd=\/initrd\.img root=\/dev\/ram0 quiet SRC= DATA=/append initrd=\/initrd.img root=\/dev\/ram0 quiet androidboot.hardware=android_x86 SRC= DATA=/g' "$WORK_DIR/iso-root/isolinux/isolinux.cfg"
+    python3 -c '
+import re
+path = "'"$WORK_DIR"'/iso-root/isolinux/isolinux.cfg"
+try:
+    with open(path, "r") as f:
+        c = f.read()
+    c = re.sub(r"timeout \d+", "timeout 50", c)
+    m = re.search(r"\n(label install\n\tmenu label [^\n]+\n\tkernel [^\n]+\n\tappend [^\n]+)", c)
+    if m:
+        inst = m.group(1)
+        inst = re.sub(r"append [^\n]+", "append initrd=/initrd.img root=/dev/ram0 androidboot.hardware=android_x86 INSTALL=1\n\tmenu default", inst)
+        c = c.replace(m.group(0), "")
+        c = re.sub(r"(label livem\n\tmenu label [^\n]+\n\tkernel [^\n]+\n\tappend [^\n]+)", inst + r"\n\n\1", c)
+        with open(path, "w") as f:
+            f.write(c)
+except Exception:
+    pass
+'
 fi
 if [ -f "$WORK_DIR/iso-root/boot/grub/grub.cfg" ]; then
     sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/boot/grub/grub.cfg"
+    sed -i 's/set timeout=.*/set timeout=5\nset default=0/g' "$WORK_DIR/iso-root/boot/grub/grub.cfg"
 fi
 if [ -f "$WORK_DIR/iso-root/efi/boot/grub.cfg" ]; then
     sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/efi/boot/grub.cfg"
     sed -i "s/Etidroid VER/Etidroid $VERSION_TAG/g" "$WORK_DIR/iso-root/efi/boot/grub.cfg"
     sed -i 's/CMDLINE/androidboot.hardware=android_x86/g' "$WORK_DIR/iso-root/efi/boot/grub.cfg"
+    sed -i 's/set timeout=.*/set timeout=5\nset default=0/g' "$WORK_DIR/iso-root/efi/boot/grub.cfg"
 fi
 if [ -f "$WORK_DIR/iso-root/efi/boot/android.cfg" ]; then
     sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
-    sed -i 's/shift 3/shift 2/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
     sed -i 's/if \[ -s ($android)$kdir\/install\.img \]; then/if true; then/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
-    sed -i '/add_entry "\$live" quiet/a \
+    sed -i '1i set default=0\nset timeout=5' "$WORK_DIR/iso-root/efi/boot/android.cfg"
+    sed -i 's/add_entry "\$live" quiet$/add_entry "$live" quiet androidboot.hardware=android_x86/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
+    sed -i '/add_entry "\$live"/i \
 \
 menuentry "Installation - Install Etidroid to harddisk" --class android-x86 {\
 	savedefault\
@@ -260,9 +447,10 @@ menuentry "Installation - Install Etidroid to harddisk" --class android-x86 {\
 	if [ ! -e $kdir/kernel ]; then\
 		search --no-floppy --set root -f $kdir/kernel\
 	fi\
-	linux $kdir/kernel root=/dev/ram0 $src INSTALL=1\
+	linux $kdir/kernel root=/dev/ram0 $src androidboot.hardware=android_x86 INSTALL=1\
 	initrd $kdir/initrd.img\
-}' "$WORK_DIR/iso-root/efi/boot/android.cfg"
+}\
+' "$WORK_DIR/iso-root/efi/boot/android.cfg"
     sed -i '/add_entry "Installation" INSTALL=1/d' "$WORK_DIR/iso-root/efi/boot/android.cfg"
 fi
 

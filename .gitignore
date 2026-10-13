@@ -5,3 +5,4 @@ build_tmp/
 work/
 *.sha256
 *.md5
+debug/
