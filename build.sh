@@ -68,8 +68,18 @@ case "$TARGET" in
     EXPAND_SIZE="3400M"
     VOL_ID="Etidroid 10.0 (x86_64)"
     ;;
+  11.0|11|11.0-20201218)
+    VERSION_TAG="11.0"
+    BASE_ISO_NAME="android-x86_64-11.0-20201218.iso"
+    BASE_ISO_URL="https://downloads.sourceforge.net/project/android-x86/Release%2011.0/android-x86_64-11.0-20201218.iso"
+    OUTPUT_ISO="${SCRIPT_DIR}/etidroid-11.0.iso"
+    IS_EFI_DUAL=true
+    EFI_LOAD_SIZE=8192
+    EXPAND_SIZE="3600M"
+    VOL_ID="Etidroid 11.0 (x86_64)"
+    ;;
   *)
-    echo "Uso: $0 [4.4|5.1|7.1|8.1|9.0|10.0]"
+    echo "Uso: $0 [4.4|5.1|7.1|8.1|9.0|10.0|11.0]"
     exit 1
     ;;
 esac
@@ -80,8 +90,13 @@ echo "=== Etidroid ISO Build Script (Alvo: $VERSION_TAG) ==="
 
 # 1. Download base ISO if not present
 if [ ! -f "$BASE_ISO" ]; then
-    echo "[+] Baixando $BASE_ISO_NAME..."
-    curl -L -o "$BASE_ISO" "$BASE_ISO_URL"
+    if [ -f "/home/miguel/Downloads/${BASE_ISO_NAME}" ]; then
+        echo "[+] Copiando $BASE_ISO_NAME de Downloads..."
+        cp -l "/home/miguel/Downloads/${BASE_ISO_NAME}" "$BASE_ISO" 2>/dev/null || cp "/home/miguel/Downloads/${BASE_ISO_NAME}" "$BASE_ISO"
+    elif [ -n "$BASE_ISO_URL" ]; then
+        echo "[+] Baixando $BASE_ISO_NAME..."
+        curl -L -o "$BASE_ISO" "$BASE_ISO_URL"
+    fi
 fi
 
 rm -rf "$WORK_DIR"
@@ -127,6 +142,8 @@ if [ -f "$WORK_DIR/iso-root/install.img" ] && [ -f "${SCRIPT_DIR}/assets/install
     if [ -f "$WORK_DIR/install-root/bin/ld-linux.so.2" ]; then
         cp -f "$WORK_DIR/install-root/bin/ld-linux.so.2" "$WORK_DIR/install-root/lib/ld-linux.so.2" 2>/dev/null || true
     fi
+    find "$WORK_DIR/install-root/bin" "$WORK_DIR/install-root/sbin" -type f -exec chmod +x {} + 2>/dev/null || true
+    chmod -R +x "$WORK_DIR/install-root/grub" 2>/dev/null || true
 
     (cd "$WORK_DIR/install-root" && find . | cpio -H newc -o 2>/dev/null | gzip -9 > "$WORK_DIR/iso-root/install.img")
 fi
@@ -220,6 +237,8 @@ with open(path, "w") as f:
         ln -sf busybox "$WORK_DIR/initrd-root/bin/$tool" 2>/dev/null || true
         ln -sf ../bin/busybox "$WORK_DIR/initrd-root/sbin/$tool" 2>/dev/null || true
     done
+    find "$WORK_DIR/initrd-root/bin" "$WORK_DIR/initrd-root/sbin" -type f -exec chmod +x {} + 2>/dev/null || true
+    chmod -R +x "$WORK_DIR/initrd-root/grub" 2>/dev/null || true
     (cd "$WORK_DIR/initrd-root" && find . | cpio -H newc -o 2>/dev/null | gzip -9 > "$WORK_DIR/iso-root/initrd.img")
     rm -rf "$WORK_DIR/initrd-root" "$WORK_DIR/install-root"
 fi
@@ -290,12 +309,25 @@ if [ "$IS_SAR" = true ]; then
     echo "[+] Garantindo compatibilidade de init e hardware HAL para SAR (android_x86)..."
     debugfs -R "dump init.android_x86_64.rc \"$WORK_DIR/init.rc.tmp\"" "$IMG" 2>/dev/null || true
     if [ -f "$WORK_DIR/init.rc.tmp" ]; then
+        sed -i 's/setprop status.battery.state Slow/setprop status.battery.state Charged/g' "$WORK_DIR/init.rc.tmp"
+        sed -i 's/setprop status.battery.level 5/setprop status.battery.level 10/g' "$WORK_DIR/init.rc.tmp"
+        sed -i 's/setprop status.battery.level_raw  50/setprop status.battery.level_raw 100/g' "$WORK_DIR/init.rc.tmp"
+        sed -i 's/setprop status.battery.level_scale 9/setprop status.battery.level_scale 10/g' "$WORK_DIR/init.rc.tmp"
         debugfs -w -R "rm init.android_x86.rc" "$IMG" 2>/dev/null || true
         debugfs -w -R "write \"$WORK_DIR/init.rc.tmp\" init.android_x86.rc" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif init.android_x86.rc mode 0100750" "$IMG" 2>/dev/null || true
+        debugfs -w -R "rm init.android_x86_64.rc" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"$WORK_DIR/init.rc.tmp\" init.android_x86_64.rc" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif init.android_x86_64.rc mode 0100750" "$IMG" 2>/dev/null || true
     fi
     debugfs -R "dump fstab.android_x86_64 \"$WORK_DIR/fstab.tmp\"" "$IMG" 2>/dev/null || true
     if [ -f "$WORK_DIR/fstab.tmp" ]; then
+        if [ "$VERSION_TAG" = "11.0" ] && ! grep -q "^system[[:space:]]" "$WORK_DIR/fstab.tmp"; then
+            sed -i '1i system\t\t/system\t\text4\tro\tdefaults' "$WORK_DIR/fstab.tmp"
+            debugfs -w -R "rm fstab.android_x86_64" "$IMG" 2>/dev/null || true
+            debugfs -w -R "write \"$WORK_DIR/fstab.tmp\" fstab.android_x86_64" "$IMG" 2>/dev/null || true
+            debugfs -w -R "sif fstab.android_x86_64 mode 0100640" "$IMG" 2>/dev/null || true
+        fi
         debugfs -w -R "rm fstab.android_x86" "$IMG" 2>/dev/null || true
         debugfs -w -R "write \"$WORK_DIR/fstab.tmp\" fstab.android_x86" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif fstab.android_x86 mode 0100640" "$IMG" 2>/dev/null || true
@@ -311,12 +343,54 @@ if [ "$IS_SAR" = true ]; then
         sed -i 's/pm.dexopt.first-boot=quicken/pm.dexopt.first-boot=verify/g' "$WORK_DIR/default.prop"
         sed -i 's/ro.secure=1/ro.secure=0/g' "$WORK_DIR/default.prop"
         sed -i 's/ro.adb.secure=1/ro.adb.secure=0/g' "$WORK_DIR/default.prop"
-        echo "ro.hardware.gralloc=gbm" >> "$WORK_DIR/default.prop"
-        echo "ro.hardware.hwcomposer=drm" >> "$WORK_DIR/default.prop"
+        if [ "$VERSION_TAG" = "10.0" ]; then
+            echo "ro.hardware.gralloc=gbm" >> "$WORK_DIR/default.prop"
+            echo "ro.hardware.hwcomposer=drm" >> "$WORK_DIR/default.prop"
+        fi
         echo "service.adb.tcp.port=5555" >> "$WORK_DIR/default.prop"
         debugfs -w -R "rm default.prop" "$IMG" 2>/dev/null || true
         debugfs -w -R "write \"$WORK_DIR/default.prop\" default.prop" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif default.prop mode 0100600" "$IMG" 2>/dev/null || true
+    fi
+
+    echo "[+] Injetando simulador de bateria e supressão de cursor em init.sh..."
+    INIT_SH_PATH="system/etc/init.sh"
+    debugfs -R "dump $INIT_SH_PATH \"$WORK_DIR/init.sh.tmp\"" "$IMG" 2>/dev/null || debugfs -R "dump etc/init.sh \"$WORK_DIR/init.sh.tmp\"" "$IMG" 2>/dev/null || true
+    if [ -f "$WORK_DIR/init.sh.tmp" ]; then
+        python3 -c '
+path = "'"$WORK_DIR"'/init.sh.tmp"
+with open(path, "r") as f:
+    c = f.read()
+
+mock = """\techo 0 > /sys/class/graphics/fbcon/cursor_blink 2>/dev/null || true
+\techo -en "\\033[?25l" > /dev/tty0 2>/dev/null || true
+\tif [ ! -d /sys/class/power_supply/BAT0 -a ! -d /sys/class/power_supply/battery ]; then
+\t\tmount -t tmpfs -o mode=0755,context=u:object_r:sysfs:s0 tmpfs /sys/class/power_supply 2>/dev/null || mount -t tmpfs -o mode=0755 tmpfs /sys/class/power_supply
+\t\tmkdir -p /sys/class/power_supply/AC /sys/class/power_supply/BAT0
+\t\techo "Mains" > /sys/class/power_supply/AC/type
+\t\techo "1" > /sys/class/power_supply/AC/online
+\t\techo "Battery" > /sys/class/power_supply/BAT0/type
+\t\techo "Full" > /sys/class/power_supply/BAT0/status
+\t\techo "Good" > /sys/class/power_supply/BAT0/health
+\t\techo "1" > /sys/class/power_supply/BAT0/present
+\t\techo "100" > /sys/class/power_supply/BAT0/capacity
+\t\techo "4200000" > /sys/class/power_supply/BAT0/voltage_now
+\t\techo "250" > /sys/class/power_supply/BAT0/temp
+\t\techo "Li-ion" > /sys/class/power_supply/BAT0/technology
+\t\tchmod -R 755 /sys/class/power_supply
+\t\tchmod 644 /sys/class/power_supply/AC/* /sys/class/power_supply/BAT0/* 2>/dev/null || true
+\tfi
+"""
+target = "function do_init()\\n{\\n"
+if target in c and "power_supply/BAT0" not in c:
+    c = c.replace(target, target + mock)
+    with open(path, "w") as f:
+        f.write(c)
+'
+        debugfs -w -R "rm $INIT_SH_PATH" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"$WORK_DIR/init.sh.tmp\" $INIT_SH_PATH" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif $INIT_SH_PATH mode 0100755" "$IMG" 2>/dev/null || true
+        debugfs -w -R "ea_set $INIT_SH_PATH security.selinux u:object_r:system_file:s0\\000" "$IMG" 2>/dev/null || true
     fi
 else
     debugfs -w -R "rm media/bootanimation.zip" "$IMG" 2>/dev/null || true
@@ -347,43 +421,50 @@ debugfs -w -R "sif $PROP_PATH gid 0" "$IMG"
 debugfs -w -R "ea_set $PROP_PATH security.selinux u:object_r:system_file:s0\000" "$IMG"
 
 # Injetar patches gráficos de compatibilidade (Mesa Gallium e HWC)
-if [ -d "${SCRIPT_DIR}/patches" ]; then
-    echo "[+] Injetando patches gráficos..."
-    if [ -f "${SCRIPT_DIR}/patches/gralloc.gbm.so" ]; then
+PATCH_DIR=""
+if [ -d "${SCRIPT_DIR}/patches/${VERSION_TAG}" ]; then
+    PATCH_DIR="${SCRIPT_DIR}/patches/${VERSION_TAG}"
+elif [ "$VERSION_TAG" = "10.0" ] && [ -d "${SCRIPT_DIR}/patches" ]; then
+    PATCH_DIR="${SCRIPT_DIR}/patches"
+fi
+
+if [ -n "$PATCH_DIR" ]; then
+    echo "[+] Injetando patches gráficos de $PATCH_DIR..."
+    if [ -f "${PATCH_DIR}/gralloc.gbm.so" ]; then
         debugfs -w -R "rm system/vendor/lib64/hw/gralloc.gbm.so" "$IMG" 2>/dev/null || true
-        debugfs -w -R "write \"${SCRIPT_DIR}/patches/gralloc.gbm.so\" system/vendor/lib64/hw/gralloc.gbm.so" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"${PATCH_DIR}/gralloc.gbm.so\" system/vendor/lib64/hw/gralloc.gbm.so" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif system/vendor/lib64/hw/gralloc.gbm.so mode 0100644" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif system/vendor/lib64/hw/gralloc.gbm.so uid 0" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif system/vendor/lib64/hw/gralloc.gbm.so gid 0" "$IMG" 2>/dev/null || true
         debugfs -w -R "ea_set system/vendor/lib64/hw/gralloc.gbm.so security.selinux u:object_r:vendor_file:s0\000" "$IMG" 2>/dev/null || true
     fi
-    if [ -f "${SCRIPT_DIR}/patches/libGLES_mesa_patched.so" ]; then
+    if [ -f "${PATCH_DIR}/libGLES_mesa_patched.so" ]; then
         debugfs -w -R "rm system/vendor/lib64/egl/libGLES_mesa.so" "$IMG" 2>/dev/null || true
-        debugfs -w -R "write \"${SCRIPT_DIR}/patches/libGLES_mesa_patched.so\" system/vendor/lib64/egl/libGLES_mesa.so" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"${PATCH_DIR}/libGLES_mesa_patched.so\" system/vendor/lib64/egl/libGLES_mesa.so" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif system/vendor/lib64/egl/libGLES_mesa.so mode 0100644" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif system/vendor/lib64/egl/libGLES_mesa.so uid 0" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif system/vendor/lib64/egl/libGLES_mesa.so gid 0" "$IMG" 2>/dev/null || true
         debugfs -w -R "ea_set system/vendor/lib64/egl/libGLES_mesa.so security.selinux u:object_r:vendor_file:s0\000" "$IMG" 2>/dev/null || true
     fi
-    if [ -f "${SCRIPT_DIR}/patches/libGLES_mesa_32_patched.so" ]; then
+    if [ -f "${PATCH_DIR}/libGLES_mesa_32_patched.so" ]; then
         debugfs -w -R "rm system/vendor/lib/egl/libGLES_mesa.so" "$IMG" 2>/dev/null || true
-        debugfs -w -R "write \"${SCRIPT_DIR}/patches/libGLES_mesa_32_patched.so\" system/vendor/lib/egl/libGLES_mesa.so" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"${PATCH_DIR}/libGLES_mesa_32_patched.so\" system/vendor/lib/egl/libGLES_mesa.so" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif system/vendor/lib/egl/libGLES_mesa.so mode 0100644" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif system/vendor/lib/egl/libGLES_mesa.so uid 0" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif system/vendor/lib/egl/libGLES_mesa.so gid 0" "$IMG" 2>/dev/null || true
         debugfs -w -R "ea_set system/vendor/lib/egl/libGLES_mesa.so security.selinux u:object_r:vendor_file:s0\000" "$IMG" 2>/dev/null || true
     fi
-    if [ -f "${SCRIPT_DIR}/patches/libhwc2onfbadapter_patched.so" ]; then
+    if [ -f "${PATCH_DIR}/libhwc2onfbadapter_patched.so" ]; then
         debugfs -w -R "rm system/vendor/lib64/libhwc2onfbadapter.so" "$IMG" 2>/dev/null || true
-        debugfs -w -R "write \"${SCRIPT_DIR}/patches/libhwc2onfbadapter_patched.so\" system/vendor/lib64/libhwc2onfbadapter.so" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"${PATCH_DIR}/libhwc2onfbadapter_patched.so\" system/vendor/lib64/libhwc2onfbadapter.so" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif system/vendor/lib64/libhwc2onfbadapter.so mode 0100644" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif system/vendor/lib64/libhwc2onfbadapter.so uid 0" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif system/vendor/lib64/libhwc2onfbadapter.so gid 0" "$IMG" 2>/dev/null || true
         debugfs -w -R "ea_set system/vendor/lib64/libhwc2onfbadapter.so security.selinux u:object_r:vendor_file:s0\000" "$IMG" 2>/dev/null || true
     fi
-    if [ -f "${SCRIPT_DIR}/patches/libhwc2onfbadapter_32_patched.so" ]; then
+    if [ -f "${PATCH_DIR}/libhwc2onfbadapter_32_patched.so" ]; then
         debugfs -w -R "rm system/vendor/lib/libhwc2onfbadapter.so" "$IMG" 2>/dev/null || true
-        debugfs -w -R "write \"${SCRIPT_DIR}/patches/libhwc2onfbadapter_32_patched.so\" system/vendor/lib/libhwc2onfbadapter.so" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"${PATCH_DIR}/libhwc2onfbadapter_32_patched.so\" system/vendor/lib/libhwc2onfbadapter.so" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif system/vendor/lib/libhwc2onfbadapter.so mode 0100644" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif system/vendor/lib/libhwc2onfbadapter.so uid 0" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif system/vendor/lib/libhwc2onfbadapter.so gid 0" "$IMG" 2>/dev/null || true
@@ -404,7 +485,7 @@ mksquashfs "$WORK_DIR/sfs-root" "$WORK_DIR/iso-root/system.sfs" -comp gzip -b 12
 echo "[+] Atualizando menus de boot..."
 if [ -f "$WORK_DIR/iso-root/isolinux/isolinux.cfg" ]; then
     sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/isolinux/isolinux.cfg"
-    sed -i 's/append initrd=\/initrd\.img root=\/dev\/ram0 quiet SRC= DATA=/append initrd=\/initrd.img root=\/dev\/ram0 quiet androidboot.hardware=android_x86 SRC= DATA=/g' "$WORK_DIR/iso-root/isolinux/isolinux.cfg"
+    sed -i 's/append initrd=\/initrd\.img root=\/dev\/ram0 quiet SRC= DATA=/append initrd=\/initrd.img root=\/dev\/ram0 quiet androidboot.hardware=android_x86 vt.global_cursor_default=0 androidboot.selinux=permissive SRC= DATA=/g' "$WORK_DIR/iso-root/isolinux/isolinux.cfg"
     python3 -c '
 import re
 path = "'"$WORK_DIR"'/iso-root/isolinux/isolinux.cfg"
@@ -431,14 +512,14 @@ fi
 if [ -f "$WORK_DIR/iso-root/efi/boot/grub.cfg" ]; then
     sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/efi/boot/grub.cfg"
     sed -i "s/Etidroid VER/Etidroid $VERSION_TAG/g" "$WORK_DIR/iso-root/efi/boot/grub.cfg"
-    sed -i 's/CMDLINE/androidboot.hardware=android_x86/g' "$WORK_DIR/iso-root/efi/boot/grub.cfg"
+    sed -i 's/CMDLINE/androidboot.hardware=android_x86 vt.global_cursor_default=0 androidboot.selinux=permissive/g' "$WORK_DIR/iso-root/efi/boot/grub.cfg"
     sed -i 's/set timeout=.*/set timeout=5\nset default=0/g' "$WORK_DIR/iso-root/efi/boot/grub.cfg"
 fi
 if [ -f "$WORK_DIR/iso-root/efi/boot/android.cfg" ]; then
     sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
     sed -i 's/if \[ -s ($android)$kdir\/install\.img \]; then/if true; then/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
     sed -i '1i set default=0\nset timeout=5' "$WORK_DIR/iso-root/efi/boot/android.cfg"
-    sed -i 's/add_entry "\$live" quiet$/add_entry "$live" quiet androidboot.hardware=android_x86/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
+    sed -i 's/add_entry "\$live" quiet$/add_entry "$live" quiet androidboot.hardware=android_x86 vt.global_cursor_default=0 androidboot.selinux=permissive/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
     sed -i '/add_entry "\$live"/i \
 \
 menuentry "Installation - Install Etidroid to harddisk" --class android-x86 {\

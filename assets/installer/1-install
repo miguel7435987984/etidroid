@@ -270,10 +270,11 @@ create_menulst()
 	[ -n "$VESA" ] && vga="vga=788 modeset=0"
 	echo -e "${GRUB_OPTIONS:-default=0\ntimeout=6\nsplashimage=/grub/android-x86.xpm.gz\n}root (hd0,$1)\n" > $menulst
 
-	create_entry "$OS_TITLE $VER" quiet $cmdline
-	create_entry "$OS_TITLE $VER (Debug mode)" $cmdline DEBUG=2
-	create_entry "$OS_TITLE $VER (Debug nomodeset)" nomodeset $cmdline DEBUG=2
-	create_entry "$OS_TITLE $VER (Debug video=LVDS-1:d)" video=LVDS-1:d $cmdline DEBUG=2
+	create_entry "$OS_TITLE $VER" quiet vt.global_cursor_default=0 androidboot.selinux=permissive $cmdline
+	create_entry "$OS_TITLE $VER (nomodeset)" nomodeset video=1024x768-32 quiet vt.global_cursor_default=0 androidboot.selinux=permissive $cmdline
+	create_entry "$OS_TITLE $VER (Debug mode)" $cmdline DEBUG=2 vt.global_cursor_default=0
+	create_entry "$OS_TITLE $VER (Debug nomodeset)" nomodeset $cmdline DEBUG=2 vt.global_cursor_default=0
+	create_entry "$OS_TITLE $VER (Debug video=LVDS-1:d)" video=LVDS-1:d $cmdline DEBUG=2 vt.global_cursor_default=0
 }
 
 create_winitem()
@@ -425,6 +426,7 @@ install_to()
 	[ -z "$efi" ] && adialog --title " Confirm " --no-label Skip --yesno \
 		"\n Do you want to install boot loader GRUB?" 7 47
 	if [ $? -eq 0 ]; then
+		chmod -R +x /bin /sbin /grub 2>/dev/null || true
 		get_part_info $1
 		if fdisk -l /dev/$disk | grep -q GPT; then
 			umount /hd
