@@ -92,8 +92,20 @@ case "$TARGET" in
     EXPAND_SIZE="4500M"
     VOL_ID="Etidroid 12.0 (x86_64)"
     ;;
+  13.0|13|13.0-bliss16)
+    VERSION_TAG="13.0"
+    BASE_ISO_NAME="Bliss-v16.9.7-x86_64-OFFICIAL-gapps-20241011.iso"
+    BASE_ISO_URL="https://downloads.sourceforge.net/project/blissos-x86/Official/BlissOS16/Gapps/Generic/Bliss-v16.9.7-x86_64-OFFICIAL-gapps-20241011.iso"
+    GAPPS_ZIP_NAME=""
+    GAPPS_ZIP_URL=""
+    OUTPUT_ISO="${SCRIPT_DIR}/etidroid-13.0.iso"
+    IS_EFI_DUAL=true
+    EFI_LOAD_SIZE=8192
+    EXPAND_SIZE="6000M"
+    VOL_ID="Etidroid 13.0 (x86_64)"
+    ;;
   *)
-    echo "Uso: $0 [4.4|5.1|7.1|8.1|9.0|10.0|11.0|12.0]"
+    echo "Uso: $0 [4.4|5.1|7.1|8.1|9.0|10.0|11.0|12.0|13.0]"
     exit 1
     ;;
 esac
@@ -154,7 +166,7 @@ find "$WORK_DIR/iso-root" -name "TRANS.TBL" -delete
 if [ -f "$WORK_DIR/iso-root/install.img" ] && [ -f "${SCRIPT_DIR}/assets/installer/1-install" ]; then
     echo "[+] Injetando script do instalador em install.img..."
     mkdir -p "$WORK_DIR/install-root"
-    (cd "$WORK_DIR/install-root" && gzip -dc "$WORK_DIR/iso-root/install.img" | cpio -idmv >/dev/null 2>&1)
+    (cd "$WORK_DIR/install-root" && (gzip -dc "$WORK_DIR/iso-root/install.img" 2>/dev/null | cpio -idmu >/dev/null 2>&1 || true))
     mkdir -p "$WORK_DIR/install-root/scripts"
     echo "VER=$VERSION_TAG" > "$WORK_DIR/install-root/scripts/00-ver"
     cp "${SCRIPT_DIR}/assets/installer/1-install" "$WORK_DIR/install-root/scripts/1-install"
@@ -180,7 +192,7 @@ fi
 if [ -f "$WORK_DIR/iso-root/initrd.img" ] && [ -f "${SCRIPT_DIR}/assets/installer/1-install" ]; then
     echo "[+] Integrando instalador completo e binarios diretamente em initrd.img..."
     mkdir -p "$WORK_DIR/initrd-root"
-    (cd "$WORK_DIR/initrd-root" && gzip -dc "$WORK_DIR/iso-root/initrd.img" | cpio -idmv >/dev/null 2>&1)
+    (cd "$WORK_DIR/initrd-root" && (gzip -dc "$WORK_DIR/iso-root/initrd.img" 2>/dev/null | cpio -idmu >/dev/null 2>&1 || true))
     if [ -d "$WORK_DIR/install-root" ]; then
         cp -a "$WORK_DIR/install-root/"* "$WORK_DIR/initrd-root/"
     fi
@@ -274,9 +286,18 @@ with open(path, "w") as f:
 fi
 
 # 4. Extrair e modificar system.img
-echo "[+] Descompactando system.sfs..."
 mkdir -p "$WORK_DIR/sfs-root"
-unsquashfs -no-xattrs -d "$WORK_DIR/sfs-root" "$WORK_DIR/iso-root/system.sfs"
+if [ -f "$WORK_DIR/iso-root/system.efs" ]; then
+    echo "[+] Extraindo system.img de system.efs..."
+    fsck.erofs --extract="$WORK_DIR/sfs-root" "$WORK_DIR/iso-root/system.efs"
+    rm -f "$WORK_DIR/iso-root/system.efs"
+elif [ -f "$WORK_DIR/iso-root/system.sfs" ]; then
+    echo "[+] Descompactando system.sfs..."
+    unsquashfs -no-xattrs -d "$WORK_DIR/sfs-root" "$WORK_DIR/iso-root/system.sfs"
+elif [ -f "$WORK_DIR/iso-root/system.img" ]; then
+    echo "[+] Movendo system.img direto..."
+    mv "$WORK_DIR/iso-root/system.img" "$WORK_DIR/sfs-root/system.img"
+fi
 
 IMG="$WORK_DIR/sfs-root/system.img"
 echo "[+] Redimensionando system.img para $EXPAND_SIZE..."
@@ -608,6 +629,9 @@ mksquashfs "$WORK_DIR/sfs-root" "$WORK_DIR/iso-root/system.sfs" -comp gzip -b 12
 echo "[+] Atualizando menus de boot..."
 if [ -f "$WORK_DIR/iso-root/isolinux/isolinux.cfg" ]; then
     sed -i "s/Android-x86 Live & Installation CD [0-9-]*/Etidroid Live & Installation CD $VERSION_TAG/g" "$WORK_DIR/iso-root/isolinux/isolinux.cfg"
+    sed -i "s/BlissOS-[^ ]* Live & Installation CD [0-9-]*/Etidroid Live & Installation CD $VERSION_TAG/g" "$WORK_DIR/iso-root/isolinux/isolinux.cfg"
+    sed -i 's/BlissOS-[0-9.]*/Etidroid/g' "$WORK_DIR/iso-root/isolinux/isolinux.cfg"
+    sed -i 's/BlissOS/Etidroid/g' "$WORK_DIR/iso-root/isolinux/isolinux.cfg"
     sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/isolinux/isolinux.cfg"
     sed -i 's/append initrd=\/initrd\.img root=\/dev\/ram0 quiet SRC= DATA=/append initrd=\/initrd.img root=\/dev\/ram0 quiet androidboot.hardware=android_x86 vt.global_cursor_default=0 androidboot.selinux=permissive SRC= DATA=/g' "$WORK_DIR/iso-root/isolinux/isolinux.cfg"
     python3 -c '
@@ -631,16 +655,20 @@ except Exception:
 fi
 if [ -f "$WORK_DIR/iso-root/boot/grub/grub.cfg" ]; then
     sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/boot/grub/grub.cfg"
+    sed -i 's/BlissOS/Etidroid/g' "$WORK_DIR/iso-root/boot/grub/grub.cfg"
     sed -i 's/set timeout=.*/set timeout=5\nset default=0/g' "$WORK_DIR/iso-root/boot/grub/grub.cfg"
 fi
 if [ -f "$WORK_DIR/iso-root/efi/boot/grub.cfg" ]; then
     sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/efi/boot/grub.cfg"
+    sed -i 's/BlissOS/Etidroid/g' "$WORK_DIR/iso-root/efi/boot/grub.cfg"
     sed -i "s/Etidroid VER/Etidroid $VERSION_TAG/g" "$WORK_DIR/iso-root/efi/boot/grub.cfg"
     sed -i 's/CMDLINE/androidboot.hardware=android_x86 vt.global_cursor_default=0 androidboot.selinux=permissive/g' "$WORK_DIR/iso-root/efi/boot/grub.cfg"
     sed -i 's/set timeout=.*/set timeout=5\nset default=0/g' "$WORK_DIR/iso-root/efi/boot/grub.cfg"
 fi
 if [ -f "$WORK_DIR/iso-root/efi/boot/android.cfg" ]; then
     sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
+    sed -i "s/BlissOS-[^ ]* [0-9-]*/Etidroid $VERSION_TAG/g" "$WORK_DIR/iso-root/efi/boot/android.cfg"
+    sed -i 's/BlissOS/Etidroid/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
     sed -i 's/if \[ -s ($android)$kdir\/install\.img \]; then/if true; then/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
     sed -i '1i set default=0\nset timeout=5' "$WORK_DIR/iso-root/efi/boot/android.cfg"
     sed -i 's/add_entry "\$live" quiet$/add_entry "$live" quiet androidboot.hardware=android_x86 vt.global_cursor_default=0 androidboot.selinux=permissive/g' "$WORK_DIR/iso-root/efi/boot/android.cfg"
