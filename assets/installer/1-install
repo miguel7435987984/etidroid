@@ -21,7 +21,8 @@ menufile=/tmp/menu-$$
 
 CPIO=cpio
 OS_TITLE=${OS_TITLE:-Etidroid}
-VER=${VER:-10.0}
+[ -f /scripts/00-ver ] && . /scripts/00-ver
+VER=${VER:-11.0}
 
 rebooting()
 {
@@ -277,6 +278,37 @@ create_menulst()
 	create_entry "$OS_TITLE $VER (Debug video=LVDS-1:d)" video=LVDS-1:d $cmdline DEBUG=2 vt.global_cursor_default=0
 }
 
+create_grubcfg()
+{
+	mkdir -p /hd/boot/grub
+	cat << EOF > /hd/boot/grub/grub.cfg
+set default=0
+set timeout=5
+
+insmod part_msdos
+insmod ext2
+
+menuentry '$OS_TITLE $VER' {
+    search --no-floppy --set=root --file /$asrc/kernel
+    linux /$asrc/kernel quiet vt.global_cursor_default=0 androidboot.selinux=permissive root=/dev/ram0 androidboot.hardware=android_x86 $cmdline SRC=/$asrc
+    initrd /$asrc/initrd.img
+}
+
+menuentry '$OS_TITLE $VER (nomodeset)' {
+    search --no-floppy --set=root --file /$asrc/kernel
+    linux /$asrc/kernel nomodeset video=1024x768-32 quiet vt.global_cursor_default=0 androidboot.selinux=permissive root=/dev/ram0 androidboot.hardware=android_x86 $cmdline SRC=/$asrc
+    initrd /$asrc/initrd.img
+}
+
+menuentry '$OS_TITLE $VER (Debug mode)' {
+    search --no-floppy --set=root --file /$asrc/kernel
+    linux /$asrc/kernel root=/dev/ram0 androidboot.hardware=android_x86 $cmdline DEBUG=2 vt.global_cursor_default=0 SRC=/$asrc
+    initrd /$asrc/initrd.img
+}
+EOF
+	cp -f /hd/boot/grub/grub.cfg /hd/grub/grub.cfg 2>/dev/null || true
+}
+
 create_winitem()
 {
 	win=`fdisk -l /dev/$(echo $1 | cut -b-3) | grep ^/dev | cut -b6-12,55- | awk '{
@@ -442,11 +474,11 @@ install_to()
 		cp -af /grub /hd
 		p=$(($p-1))
 		create_menulst $p
+		create_grubcfg
 		create_winitem $1 $d
 		rm -f /hd/boot/grub/stage1
 		echo "(hd$d) /dev/$disk" > /hd/grub/device.map
-		echo "setup (hd$d) (hd$d,$p)" | grub --batch --no-floppy --device-map /hd/grub/device.map > /dev/tty5
-		[ $? -ne 0 ] && return 255
+		echo "setup (hd$d) (hd$d,$p)" | grub --batch --no-floppy --device-map /hd/grub/device.map > /dev/tty5 2>&1 || true
 	fi
 
 	[ -n "$efi" ] && adialog --title " Confirm " --no-label Skip --yesno \

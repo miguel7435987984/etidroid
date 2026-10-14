@@ -72,14 +72,28 @@ case "$TARGET" in
     VERSION_TAG="11.0"
     BASE_ISO_NAME="android-x86_64-11.0-20201218.iso"
     BASE_ISO_URL="https://downloads.sourceforge.net/project/android-x86/Release%2011.0/android-x86_64-11.0-20201218.iso"
+    GAPPS_ZIP_NAME="open_gapps-x86_64-11.0-pico-20220503.zip"
+    GAPPS_ZIP_URL="https://sourceforge.net/projects/opengapps/files/x86_64/20220503/open_gapps-x86_64-11.0-pico-20220503.zip/download"
     OUTPUT_ISO="${SCRIPT_DIR}/etidroid-11.0.iso"
     IS_EFI_DUAL=true
     EFI_LOAD_SIZE=8192
-    EXPAND_SIZE="3600M"
+    EXPAND_SIZE="4000M"
     VOL_ID="Etidroid 11.0 (x86_64)"
     ;;
+  12.0|12|12.0-a12_r27)
+    VERSION_TAG="12.0"
+    BASE_ISO_NAME="android_x86_64-a12_r27-03.04.22-01-mesa22-ksu-gapps-treble-libndk-sleep-sd-libva.iso"
+    BASE_ISO_URL="https://sourceforge.net/projects/android-x86/files/Release%2012.0/android_x86_64-a12_r27-03.04.22-01-mesa22-ksu-gapps-treble-libndk-sleep-sd-libva.iso/download"
+    GAPPS_ZIP_NAME=""
+    GAPPS_ZIP_URL=""
+    OUTPUT_ISO="${SCRIPT_DIR}/etidroid-12.0.iso"
+    IS_EFI_DUAL=true
+    EFI_LOAD_SIZE=8192
+    EXPAND_SIZE="4500M"
+    VOL_ID="Etidroid 12.0 (x86_64)"
+    ;;
   *)
-    echo "Uso: $0 [4.4|5.1|7.1|8.1|9.0|10.0|11.0]"
+    echo "Uso: $0 [4.4|5.1|7.1|8.1|9.0|10.0|11.0|12.0]"
     exit 1
     ;;
 esac
@@ -96,6 +110,20 @@ if [ ! -f "$BASE_ISO" ]; then
     elif [ -n "$BASE_ISO_URL" ]; then
         echo "[+] Baixando $BASE_ISO_NAME..."
         curl -L -o "$BASE_ISO" "$BASE_ISO_URL"
+    fi
+fi
+
+# Download/prepare GApps ZIP if defined
+if [ -n "${GAPPS_ZIP_NAME:-}" ]; then
+    GAPPS_ZIP="${SCRIPT_DIR}/${GAPPS_ZIP_NAME}"
+    if [ ! -f "$GAPPS_ZIP" ]; then
+        if [ -f "/home/miguel/Downloads/${GAPPS_ZIP_NAME}" ]; then
+            echo "[+] Copiando $GAPPS_ZIP_NAME de Downloads..."
+            cp -l "/home/miguel/Downloads/${GAPPS_ZIP_NAME}" "$GAPPS_ZIP" 2>/dev/null || cp "/home/miguel/Downloads/${GAPPS_ZIP_NAME}" "$GAPPS_ZIP"
+        elif [ -n "${GAPPS_ZIP_URL:-}" ]; then
+            echo "[+] Baixando $GAPPS_ZIP_NAME..."
+            curl -L -o "$GAPPS_ZIP" "$GAPPS_ZIP_URL"
+        fi
     fi
 fi
 
@@ -128,6 +156,7 @@ if [ -f "$WORK_DIR/iso-root/install.img" ] && [ -f "${SCRIPT_DIR}/assets/install
     mkdir -p "$WORK_DIR/install-root"
     (cd "$WORK_DIR/install-root" && gzip -dc "$WORK_DIR/iso-root/install.img" | cpio -idmv >/dev/null 2>&1)
     mkdir -p "$WORK_DIR/install-root/scripts"
+    echo "VER=$VERSION_TAG" > "$WORK_DIR/install-root/scripts/00-ver"
     cp "${SCRIPT_DIR}/assets/installer/1-install" "$WORK_DIR/install-root/scripts/1-install"
     chmod +x "$WORK_DIR/install-root/scripts/1-install"
 
@@ -156,6 +185,7 @@ if [ -f "$WORK_DIR/iso-root/initrd.img" ] && [ -f "${SCRIPT_DIR}/assets/installe
         cp -a "$WORK_DIR/install-root/"* "$WORK_DIR/initrd-root/"
     fi
     mkdir -p "$WORK_DIR/initrd-root/scripts"
+    echo "VER=$VERSION_TAG" > "$WORK_DIR/initrd-root/scripts/00-ver"
     cp "${SCRIPT_DIR}/assets/installer/1-install" "$WORK_DIR/initrd-root/scripts/1-install"
     chmod +x "$WORK_DIR/initrd-root/scripts/1-install"
 
@@ -322,12 +352,6 @@ if [ "$IS_SAR" = true ]; then
     fi
     debugfs -R "dump fstab.android_x86_64 \"$WORK_DIR/fstab.tmp\"" "$IMG" 2>/dev/null || true
     if [ -f "$WORK_DIR/fstab.tmp" ]; then
-        if [ "$VERSION_TAG" = "11.0" ] && ! grep -q "^system[[:space:]]" "$WORK_DIR/fstab.tmp"; then
-            sed -i '1i system\t\t/system\t\text4\tro\tdefaults' "$WORK_DIR/fstab.tmp"
-            debugfs -w -R "rm fstab.android_x86_64" "$IMG" 2>/dev/null || true
-            debugfs -w -R "write \"$WORK_DIR/fstab.tmp\" fstab.android_x86_64" "$IMG" 2>/dev/null || true
-            debugfs -w -R "sif fstab.android_x86_64 mode 0100640" "$IMG" 2>/dev/null || true
-        fi
         debugfs -w -R "rm fstab.android_x86" "$IMG" 2>/dev/null || true
         debugfs -w -R "write \"$WORK_DIR/fstab.tmp\" fstab.android_x86" "$IMG" 2>/dev/null || true
         debugfs -w -R "sif fstab.android_x86 mode 0100640" "$IMG" 2>/dev/null || true
@@ -420,6 +444,105 @@ debugfs -w -R "sif $PROP_PATH uid 0" "$IMG"
 debugfs -w -R "sif $PROP_PATH gid 0" "$IMG"
 debugfs -w -R "ea_set $PROP_PATH security.selinux u:object_r:system_file:s0\000" "$IMG"
 
+# Injetar OpenGApps se configurado
+if [ -n "${GAPPS_ZIP_NAME:-}" ] && [ -f "${SCRIPT_DIR}/${GAPPS_ZIP_NAME}" ]; then
+    echo "[+] Preparando e injetando OpenGApps ($GAPPS_ZIP_NAME) no system.img..."
+    GAPPS_WORK="$WORK_DIR/gapps_work"
+    rm -rf "$GAPPS_WORK"
+    mkdir -p "$GAPPS_WORK/extract" "$GAPPS_WORK/root"
+
+    python3 -c '
+import os, sys, zipfile, subprocess, shutil
+
+zip_path = "'"${SCRIPT_DIR}/${GAPPS_ZIP_NAME}"'"
+extract_dir = "'"$WORK_DIR/gapps_work/extract"'"
+root_dir = "'"$WORK_DIR/gapps_work/root"'"
+is_sar = '"$( [ "$IS_SAR" = true ] && echo "True" || echo "False" )"'
+sys_prefix = "system/" if is_sar else ""
+
+skip_archives = ["setupwizarddefault-x86_64.tar.lz", "setupwizardtablet-x86_64.tar.lz", "packageinstallergoogle-all.tar.lz"]
+
+with zipfile.ZipFile(zip_path, "r") as z:
+    if "g.prop" in z.namelist():
+        gprop_dest = os.path.join(root_dir, sys_prefix + "etc")
+        os.makedirs(gprop_dest, exist_ok=True)
+        with open(os.path.join(gprop_dest, "g.prop"), "wb") as f:
+            f.write(z.read("g.prop"))
+
+    for name in sorted(z.namelist()):
+        if name.endswith(".tar.lz"):
+            base = os.path.basename(name)
+            if base in skip_archives:
+                continue
+            data = z.read(name)
+            p = subprocess.Popen(["tar", "--lzip", "-xf", "-", "-C", extract_dir], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            p.communicate(data)
+
+for pkg in os.listdir(extract_dir):
+    pkg_path = os.path.join(extract_dir, pkg)
+    if not os.path.isdir(pkg_path):
+        continue
+    for sub in ["nodpi", "common"]:
+        sub_path = os.path.join(pkg_path, sub)
+        if os.path.isdir(sub_path):
+            for r, dirs, files in os.walk(sub_path):
+                rel_dir = os.path.relpath(r, sub_path)
+                target_dir = os.path.normpath(os.path.join(root_dir, sys_prefix, rel_dir))
+                os.makedirs(target_dir, exist_ok=True)
+                for f in files:
+                    src_file = os.path.join(r, f)
+                    dst_file = os.path.join(target_dir, f)
+                    shutil.copy2(src_file, dst_file)
+
+                    if f.endswith(".apk"):
+                        with zipfile.ZipFile(src_file, "r") as apk:
+                            so_files = [n for n in apk.namelist() if n.startswith("lib/x86_64/") and n.endswith(".so")]
+                            if so_files:
+                                lib_dir = os.path.join(target_dir, "lib", "x86_64")
+                                os.makedirs(lib_dir, exist_ok=True)
+                                for so in so_files:
+                                    with apk.open(so) as so_src, open(os.path.join(lib_dir, os.path.basename(so)), "wb") as so_dst:
+                                        shutil.copyfileobj(so_src, so_dst)
+
+all_dirs = []
+all_files = []
+for r, dirs, files in os.walk(root_dir):
+    rel = os.path.relpath(r, root_dir)
+    if rel != ".":
+        all_dirs.append(rel)
+    for f in files:
+        all_files.append(os.path.normpath(os.path.join(rel, f)))
+
+all_dirs.sort(key=lambda d: (d.count("/"), len(d)))
+
+cmd_file = "'"$WORK_DIR/gapps_work/debugfs_cmds.txt"'"
+with open(cmd_file, "w") as f:
+    for d in all_dirs:
+        f.write(f"mkdir {d}\n")
+        f.write(f"sif {d} mode 040755\n")
+        f.write(f"sif {d} uid 0\n")
+        f.write(f"sif {d} gid 0\n")
+        selinux = "u:object_r:vendor_overlay_file:s0\\000" if "overlay" in d else "u:object_r:system_file:s0\\000"
+        f.write(f"ea_set {d} security.selinux {selinux}\n")
+    for fl in all_files:
+        local_path = os.path.join(root_dir, fl)
+        f.write(f"rm {fl}\n")
+        f.write(f"write \"{local_path}\" {fl}\n")
+        f.write(f"sif {fl} mode 0100644\n")
+        f.write(f"sif {fl} uid 0\n")
+        f.write(f"sif {fl} gid 0\n")
+        selinux = "u:object_r:vendor_overlay_file:s0\\000" if "overlay" in fl else "u:object_r:system_file:s0\\000"
+        f.write(f"ea_set {fl} security.selinux {selinux}\n")
+
+print(f"[+] Total de diretorios OpenGApps a criar: {len(all_dirs)}")
+print(f"[+] Total de arquivos OpenGApps a injetar: {len(all_files)}")
+'
+
+    echo "[+] Executando injecao de arquivos OpenGApps via debugfs..."
+    debugfs -w -f "$GAPPS_WORK/debugfs_cmds.txt" "$IMG" >/dev/null 2>&1 || true
+    echo "[+] OpenGApps injetado com sucesso."
+fi
+
 # Injetar patches gráficos de compatibilidade (Mesa Gallium e HWC)
 PATCH_DIR=""
 if [ -d "${SCRIPT_DIR}/patches/${VERSION_TAG}" ]; then
@@ -484,6 +607,7 @@ mksquashfs "$WORK_DIR/sfs-root" "$WORK_DIR/iso-root/system.sfs" -comp gzip -b 12
 # 6. Atualizar menus de boot
 echo "[+] Atualizando menus de boot..."
 if [ -f "$WORK_DIR/iso-root/isolinux/isolinux.cfg" ]; then
+    sed -i "s/Android-x86 Live & Installation CD [0-9-]*/Etidroid Live & Installation CD $VERSION_TAG/g" "$WORK_DIR/iso-root/isolinux/isolinux.cfg"
     sed -i 's/Android-x86/Etidroid/g' "$WORK_DIR/iso-root/isolinux/isolinux.cfg"
     sed -i 's/append initrd=\/initrd\.img root=\/dev\/ram0 quiet SRC= DATA=/append initrd=\/initrd.img root=\/dev\/ram0 quiet androidboot.hardware=android_x86 vt.global_cursor_default=0 androidboot.selinux=permissive SRC= DATA=/g' "$WORK_DIR/iso-root/isolinux/isolinux.cfg"
     python3 -c '
