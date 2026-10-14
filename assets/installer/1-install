@@ -63,7 +63,7 @@ choose()
 
 size_gb()
 {
-	printf %0.2fGB $(dc `cat $1/size` 2097152 / p)
+	printf %0.2fGB $(echo `cat $1/size` 2097152 / p | dc)
 }
 
 find_partition()
@@ -188,7 +188,7 @@ select_dev()
 			[ "$sz" = "0.00GB" ] || printf "$f%10s\n" $sz
 		done
 	done | awk -v b=$booted_from '{
-		if (!match($1, b)) {
+		if (!b || !match($1, b)) {
 			printf("\"%s\" \"", $0)
 			system("cd /sys/block/*/"$1"; for f in ../device/model ../device/name; do [ -e $f ] && printf %-17s \"`cat $f`\" && break; done")
 			printf("\"\n")
