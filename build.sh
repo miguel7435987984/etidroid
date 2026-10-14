@@ -71,7 +71,7 @@ case "$TARGET" in
   11.0|11|11.0-20201218)
     VERSION_TAG="11.0"
     BASE_ISO_NAME="android-x86_64-11.0-20201218.iso"
-    BASE_ISO_URL="https://downloads.sourceforge.net/project/android-x86/Release%2011.0/android-x86_64-11.0-20201218.iso"
+    BASE_ISO_URL="https://archive.org/download/androidx86-11-isos/Android%2011%20x64%20%28User%29.iso"
     GAPPS_ZIP_NAME="open_gapps-x86_64-11.0-pico-20220503.zip"
     GAPPS_ZIP_URL="https://sourceforge.net/projects/opengapps/files/x86_64/20220503/open_gapps-x86_64-11.0-pico-20220503.zip/download"
     OUTPUT_ISO="${SCRIPT_DIR}/etidroid-11.0.iso"
@@ -83,7 +83,7 @@ case "$TARGET" in
   12.0|12|12.0-a12_r27)
     VERSION_TAG="12.0"
     BASE_ISO_NAME="android_x86_64-a12_r27-03.04.22-01-mesa22-ksu-gapps-treble-libndk-sleep-sd-libva.iso"
-    BASE_ISO_URL="https://sourceforge.net/projects/android-x86/files/Release%2012.0/android_x86_64-a12_r27-03.04.22-01-mesa22-ksu-gapps-treble-libndk-sleep-sd-libva.iso/download"
+    BASE_ISO_URL="https://archive.org/download/blissosfiles2022/android_x86_64-a12_r27-03.04.22-01-mesa22-ksu-gapps-treble-libndk-sleep-sd-libva.iso"
     GAPPS_ZIP_NAME=""
     GAPPS_ZIP_URL=""
     OUTPUT_ISO="${SCRIPT_DIR}/etidroid-12.0.iso"
@@ -121,7 +121,7 @@ if [ ! -f "$BASE_ISO" ]; then
         cp -l "/home/miguel/Downloads/${BASE_ISO_NAME}" "$BASE_ISO" 2>/dev/null || cp "/home/miguel/Downloads/${BASE_ISO_NAME}" "$BASE_ISO"
     elif [ -n "$BASE_ISO_URL" ]; then
         echo "[+] Baixando $BASE_ISO_NAME..."
-        curl -L -o "$BASE_ISO" "$BASE_ISO_URL"
+        curl -fL -o "$BASE_ISO" "$BASE_ISO_URL"
     fi
 fi
 
@@ -134,7 +134,7 @@ if [ -n "${GAPPS_ZIP_NAME:-}" ]; then
             cp -l "/home/miguel/Downloads/${GAPPS_ZIP_NAME}" "$GAPPS_ZIP" 2>/dev/null || cp "/home/miguel/Downloads/${GAPPS_ZIP_NAME}" "$GAPPS_ZIP"
         elif [ -n "${GAPPS_ZIP_URL:-}" ]; then
             echo "[+] Baixando $GAPPS_ZIP_NAME..."
-            curl -L -o "$GAPPS_ZIP" "$GAPPS_ZIP_URL"
+            curl -fL -o "$GAPPS_ZIP" "$GAPPS_ZIP_URL"
         fi
     fi
 fi
