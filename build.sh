@@ -6,6 +6,7 @@ WORK_DIR="${SCRIPT_DIR}/build_tmp"
 TARGET="${1:-4.4}"
 VIDEO_INPUT="${SCRIPT_DIR}/assets/bootanimation.mp4"
 WALLPAPER_INPUT="${SCRIPT_DIR}/assets/wallpaper.jpg"
+BANNER_INPUT="${SCRIPT_DIR}/assets/banner.jpg"
 
 case "$TARGET" in
   4.4|4.4-r5)
@@ -327,6 +328,11 @@ sed -i '/ro.config.wallpaper/d' "$WORK_DIR/build.prop"
 sed -i '/ro.config.lock_wallpaper/d' "$WORK_DIR/build.prop"
 echo "ro.config.wallpaper=/system/media/default_wallpaper.jpg" >> "$WORK_DIR/build.prop"
 echo "ro.config.lock_wallpaper=/system/media/default_wallpaper.jpg" >> "$WORK_DIR/build.prop"
+if [ -f "$BANNER_INPUT" ]; then
+    echo "ro.config.banner=/system/media/banner.jpg" >> "$WORK_DIR/build.prop"
+    echo "ro.etidroid.banner=/system/media/banner.jpg" >> "$WORK_DIR/build.prop"
+    echo "ro.etidroid.logo=/system/media/banner.jpg" >> "$WORK_DIR/build.prop"
+fi
 
 echo "[+] Injetando arquivos no system.img via debugfs..."
 if [ "$IS_SAR" = true ]; then
@@ -354,6 +360,18 @@ if [ "$IS_SAR" = true ]; then
             debugfs -w -R "sif $wall_dest uid 0" "$IMG" 2>/dev/null || true
             debugfs -w -R "sif $wall_dest gid 0" "$IMG" 2>/dev/null || true
             debugfs -w -R "ea_set $wall_dest security.selinux u:object_r:system_file:s0\000" "$IMG" 2>/dev/null || true
+        done
+    fi
+
+    if [ -f "$BANNER_INPUT" ]; then
+        echo "[+] Injetando banner do Etidroid no system.img (SAR)..."
+        for banner_dest in "system/media/banner.jpg" "system/product/media/banner.jpg" "system/etc/banner.jpg" "system/media/etidroid_banner.jpg"; do
+            debugfs -w -R "rm $banner_dest" "$IMG" 2>/dev/null || true
+            debugfs -w -R "write \"$BANNER_INPUT\" $banner_dest" "$IMG" 2>/dev/null || true
+            debugfs -w -R "sif $banner_dest mode 0100644" "$IMG" 2>/dev/null || true
+            debugfs -w -R "sif $banner_dest uid 0" "$IMG" 2>/dev/null || true
+            debugfs -w -R "sif $banner_dest gid 0" "$IMG" 2>/dev/null || true
+            debugfs -w -R "ea_set $banner_dest security.selinux u:object_r:system_file:s0\000" "$IMG" 2>/dev/null || true
         done
     fi
 
@@ -415,6 +433,18 @@ else
             debugfs -w -R "sif $wall_dest uid 0" "$IMG" 2>/dev/null || true
             debugfs -w -R "sif $wall_dest gid 0" "$IMG" 2>/dev/null || true
             debugfs -w -R "ea_set $wall_dest security.selinux u:object_r:system_file:s0\000" "$IMG" 2>/dev/null || true
+        done
+    fi
+
+    if [ -f "$BANNER_INPUT" ]; then
+        echo "[+] Injetando banner do Etidroid no system.img..."
+        for banner_dest in "media/banner.jpg" "etc/banner.jpg" "media/etidroid_banner.jpg"; do
+            debugfs -w -R "rm $banner_dest" "$IMG" 2>/dev/null || true
+            debugfs -w -R "write \"$BANNER_INPUT\" $banner_dest" "$IMG" 2>/dev/null || true
+            debugfs -w -R "sif $banner_dest mode 0100644" "$IMG" 2>/dev/null || true
+            debugfs -w -R "sif $banner_dest uid 0" "$IMG" 2>/dev/null || true
+            debugfs -w -R "sif $banner_dest gid 0" "$IMG" 2>/dev/null || true
+            debugfs -w -R "ea_set $banner_dest security.selinux u:object_r:system_file:s0\000" "$IMG" 2>/dev/null || true
         done
     fi
 fi
