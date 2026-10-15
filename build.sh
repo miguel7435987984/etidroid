@@ -398,45 +398,6 @@ if [ "$IS_SAR" = true ]; then
         debugfs -w -R "sif default.prop mode 0100600" "$IMG" 2>/dev/null || true
     fi
 
-    echo "[+] Injetando simulador de bateria e supressão de cursor em init.sh..."
-    INIT_SH_PATH="system/etc/init.sh"
-    debugfs -R "dump $INIT_SH_PATH \"$WORK_DIR/init.sh.tmp\"" "$IMG" 2>/dev/null || debugfs -R "dump etc/init.sh \"$WORK_DIR/init.sh.tmp\"" "$IMG" 2>/dev/null || true
-    if [ -f "$WORK_DIR/init.sh.tmp" ]; then
-        python3 -c '
-path = "'"$WORK_DIR"'/init.sh.tmp"
-with open(path, "r") as f:
-    c = f.read()
-
-mock = """\techo 0 > /sys/class/graphics/fbcon/cursor_blink 2>/dev/null || true
-\techo -en "\\033[?25l" > /dev/tty0 2>/dev/null || true
-\tif [ ! -d /sys/class/power_supply/BAT0 -a ! -d /sys/class/power_supply/battery ]; then
-\t\tmount -t tmpfs -o mode=0755,context=u:object_r:sysfs:s0 tmpfs /sys/class/power_supply 2>/dev/null || mount -t tmpfs -o mode=0755 tmpfs /sys/class/power_supply
-\t\tmkdir -p /sys/class/power_supply/AC /sys/class/power_supply/BAT0
-\t\techo "Mains" > /sys/class/power_supply/AC/type
-\t\techo "1" > /sys/class/power_supply/AC/online
-\t\techo "Battery" > /sys/class/power_supply/BAT0/type
-\t\techo "Full" > /sys/class/power_supply/BAT0/status
-\t\techo "Good" > /sys/class/power_supply/BAT0/health
-\t\techo "1" > /sys/class/power_supply/BAT0/present
-\t\techo "100" > /sys/class/power_supply/BAT0/capacity
-\t\techo "4200000" > /sys/class/power_supply/BAT0/voltage_now
-\t\techo "250" > /sys/class/power_supply/BAT0/temp
-\t\techo "Li-ion" > /sys/class/power_supply/BAT0/technology
-\t\tchmod -R 755 /sys/class/power_supply
-\t\tchmod 644 /sys/class/power_supply/AC/* /sys/class/power_supply/BAT0/* 2>/dev/null || true
-\tfi
-"""
-target = "function do_init()\\n{\\n"
-if target in c and "power_supply/BAT0" not in c:
-    c = c.replace(target, target + mock)
-    with open(path, "w") as f:
-        f.write(c)
-'
-        debugfs -w -R "rm $INIT_SH_PATH" "$IMG" 2>/dev/null || true
-        debugfs -w -R "write \"$WORK_DIR/init.sh.tmp\" $INIT_SH_PATH" "$IMG" 2>/dev/null || true
-        debugfs -w -R "sif $INIT_SH_PATH mode 0100755" "$IMG" 2>/dev/null || true
-        debugfs -w -R "ea_set $INIT_SH_PATH security.selinux u:object_r:system_file:s0\\000" "$IMG" 2>/dev/null || true
-    fi
 else
     debugfs -w -R "rm media/bootanimation.zip" "$IMG" 2>/dev/null || true
     debugfs -w -R "write \"$WORK_DIR/bootanimation.zip\" media/bootanimation.zip" "$IMG"
@@ -455,6 +416,67 @@ else
             debugfs -w -R "sif $wall_dest gid 0" "$IMG" 2>/dev/null || true
             debugfs -w -R "ea_set $wall_dest security.selinux u:object_r:system_file:s0\000" "$IMG" 2>/dev/null || true
         done
+    fi
+fi
+
+echo "[+] Injetando simulador de bateria e supressão de cursor em init.sh..."
+INIT_SH_PATH=""
+if debugfs -R "stat system/etc/init.sh" "$IMG" 2>&1 | grep -q "Inode:"; then
+    INIT_SH_PATH="system/etc/init.sh"
+elif debugfs -R "stat etc/init.sh" "$IMG" 2>&1 | grep -q "Inode:"; then
+    INIT_SH_PATH="etc/init.sh"
+fi
+
+if [ -n "$INIT_SH_PATH" ]; then
+    debugfs -R "dump $INIT_SH_PATH \"$WORK_DIR/init.sh.tmp\"" "$IMG" 2>/dev/null || true
+    if [ -f "$WORK_DIR/init.sh.tmp" ]; then
+        python3 -c '
+import re
+
+path = "'"$WORK_DIR"'/init.sh.tmp"
+with open(path, "r") as f:
+    c = f.read()
+
+mock = """\techo 0 > /sys/class/graphics/fbcon/cursor_blink 2>/dev/null || true
+\techo -en "\\033[?25l" > /dev/tty0 2>/dev/null || true
+\tif [ ! -d /sys/class/power_supply/BAT0 -a ! -d /sys/class/power_supply/battery ]; then
+\t\tmount -t tmpfs -o mode=0755,context=u:object_r:sysfs:s0 tmpfs /sys/class/power_supply 2>/dev/null || mount -t tmpfs -o mode=0755 tmpfs /sys/class/power_supply
+\t\tmkdir -p /sys/class/power_supply/AC /sys/class/power_supply/BAT0
+\t\techo "Mains" > /sys/class/power_supply/AC/type
+\t\techo "1" > /sys/class/power_supply/AC/online
+\t\techo "Battery" > /sys/class/power_supply/BAT0/type
+\t\techo "Full" > /sys/class/power_supply/BAT0/status
+\t\techo "Good" > /sys/class/power_supply/BAT0/health
+\t\techo "1" > /sys/class/power_supply/BAT0/present
+\t\techo "100" > /sys/class/power_supply/BAT0/capacity
+\t\techo "Full" > /sys/class/power_supply/BAT0/capacity_level
+\t\techo "4200000" > /sys/class/power_supply/BAT0/voltage_now
+\t\techo "4200000" > /sys/class/power_supply/BAT0/voltage_max
+\t\techo "0" > /sys/class/power_supply/BAT0/current_now
+\t\techo "0" > /sys/class/power_supply/BAT0/current_avg
+\t\techo "4000000" > /sys/class/power_supply/BAT0/charge_counter
+\t\techo "4000000" > /sys/class/power_supply/BAT0/charge_full
+\t\techo "4000000" > /sys/class/power_supply/BAT0/charge_full_design
+\t\techo "1" > /sys/class/power_supply/BAT0/cycle_count
+\t\techo "250" > /sys/class/power_supply/BAT0/temp
+\t\techo "Li-ion" > /sys/class/power_supply/BAT0/technology
+\t\tchmod -R 755 /sys/class/power_supply
+\t\tchmod 644 /sys/class/power_supply/AC/* /sys/class/power_supply/BAT0/* 2>/dev/null || true
+\tfi
+"""
+
+if "power_supply/BAT0" not in c:
+    pattern = r"(function\s+do_init\s*\(\s*\)\s*[\r\n]+\s*\{|do_init\s*\(\s*\)\s*[\r\n]*\s*\{)"
+    m = re.search(pattern, c)
+    if m:
+        c = c[:m.end()] + "\n" + mock + c[m.end():]
+        with open(path, "w") as f:
+            f.write(c)
+'
+        debugfs -w -R "rm $INIT_SH_PATH" "$IMG" 2>/dev/null || true
+        debugfs -w -R "write \"$WORK_DIR/init.sh.tmp\" $INIT_SH_PATH" "$IMG" 2>/dev/null || true
+        debugfs -w -R "sif $INIT_SH_PATH mode 0100755" "$IMG" 2>/dev/null || true
+        debugfs -w -R "ea_set $INIT_SH_PATH security.selinux u:object_r:system_file:s0\\000" "$IMG" 2>/dev/null || true
     fi
 fi
 
